@@ -31,7 +31,8 @@ class AuthService(IAuthService):
         token = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
         return {
             "token": token,
-            "role": user.role
+            "role": user.role,
+            "user_id": user.user_id
         }
 
     async def signup(self, data: dict, db):
@@ -39,21 +40,27 @@ class AuthService(IAuthService):
         if user:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User already exists")
         hashed_password = get_password_hash(data["password"])
-        role_str = data.get("role", "candidate")
+        
+        # Role is now required
+        if "role" not in data:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role is required")
+            
+        role_str = data["role"]
         try:
             role = UserRole(role_str)
         except ValueError:
-            role = UserRole.candidate
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role")
+            
         new_user = User(
+            name=data["name"],
             email=data["email"],
             hashed_password=hashed_password,
-            role=role,
-            name=data.get("name")
+            role=role
         )
         db.add(new_user)
         await db.commit()
         await db.refresh(new_user)
-        return str(new_user.id)
+        return str(new_user.user_id)
 
     async def logout(self, token: str = None, db: AsyncSession = Depends(get_db)):
         if token:

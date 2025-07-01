@@ -1,17 +1,21 @@
 from pydantic import BaseModel
+from app.models.user import UserRole
 
 class UserLogin(BaseModel):
     email: str
     password: str
 
 class UserRegister(BaseModel):
+    name: str
     email: str
     password: str
-    name: str  # Removed 'role' field
+    role: UserRole
 
 class UserResponse(BaseModel):
-    uid: str
+    user_id: int
+    name: str
     email: str
-    role: str
-    name: str
-    name: str
+    role: UserRole
+    
+    class Config:
+        from_attributes = True

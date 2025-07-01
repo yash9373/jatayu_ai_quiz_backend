@@ -28,10 +28,10 @@ async def register(data: user_schema.UserRegister, db: AsyncSession = Depends(ge
 @router.get("/me")
 async def read_current_user(current_user=Depends(get_current_user)):
     return {
-        "id": current_user.id,
+        "user_id": current_user.user_id,
+        "name": current_user.name,
         "email": current_user.email,
-        "role": current_user.role,
-        "name": current_user.name
+        "role": current_user.role
     }
 
 def recruiter_required(current_user=Depends(get_current_user)):
