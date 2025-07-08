@@ -6,7 +6,7 @@ import os
 import json
 import logging
 from typing import Dict, Any, Optional
-from openai import OpenAI
+import openai
 from app.schemas.test_schema import SkillGraph, SkillNode
 from app.core.config import settings
 
@@ -19,7 +19,7 @@ class AIService:
     """AI Service for OpenAI integration following Single Responsibility Principle"""
     
     def __init__(self):
-        self.client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        openai.api_key = os.environ["OPENAI_API_KEY"]
         self.model = "gpt-3.5-turbo"
     
     async def parse_job_description(self, job_description: str) -> Dict[str, Any]:
@@ -53,7 +53,7 @@ class AIService:
             Only return valid JSON, no additional text.
             """
             
-            response = self.client.chat.completions.create(
+            response = openai.ChatCompletion.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": "You are a expert HR assistant that parses job descriptions into structured data. Always return valid JSON."},
@@ -127,7 +127,7 @@ class AIService:
             Only return valid JSON, no additional text.
             """
             
-            response = self.client.chat.completions.create(
+            response = openai.ChatCompletion.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": "You are an expert technical recruiter who creates skill hierarchies for job requirements. Always return valid JSON."},

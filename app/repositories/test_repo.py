@@ -306,3 +306,7 @@ class TestRepository:
             await self.db.rollback()
             logger.error(f"Error updating is_published for test {test_id}: {str(e)}")
             raise
+
+async def get_test_by_id(db: AsyncSession, test_id: int):
+    repo = TestRepository(db)
+    return await repo.get_test_by_id(test_id)
