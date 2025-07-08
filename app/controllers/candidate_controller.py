@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 from app.services.candidate_service import CandidateService
-from app.services.Auth.auth_service import get_current_user
+from app.services.auth.auth_service import get_current_user
 from app.schemas.candidate_schema import CandidateCreate, CandidateUpdate, CandidateResponse, CandidateSummary
 from app.db.database import get_db
 from app.models.user import User, UserRole

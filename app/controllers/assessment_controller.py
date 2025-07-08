@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 from app.services.assessment_service import AssessmentService
-from app.services.Auth.auth_service import get_current_user
+from app.services.auth.auth_service import get_current_user
 from app.schemas.assessment_schema import AssessmentCreate, AssessmentUpdate, AssessmentResponse, AssessmentSummary
 from app.db.database import get_db
 from app.models.user import User, UserRole

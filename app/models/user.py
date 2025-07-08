@@ -8,7 +8,7 @@ class UserRole(enum.Enum):
     recruiter = "recruiter"
 
 class User(Base):
-    __tablename__ = "user"
+    __tablename__ = "users"
     user_id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False)
     email = Column(String(100), unique=True, nullable=False, index=True)

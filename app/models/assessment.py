@@ -9,8 +9,8 @@ class Assessment(Base):
     assessment_id = Column(Integer, primary_key=True, index=True)
     
     # Foreign keys
-    test_id = Column(Integer, ForeignKey("test.test_id"), nullable=False)
-    candidate_id = Column(Integer, ForeignKey("user.user_id"), nullable=False)
+    test_id = Column(Integer, ForeignKey("tests.test_id"), nullable=False)
+    candidate_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
     
     # Assessment data
     started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

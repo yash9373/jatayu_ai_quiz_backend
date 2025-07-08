@@ -9,8 +9,10 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 import uuid
+import re
+import html
 from app.db.database import get_db
-from app.services.Auth.AuthInterface import IAuthService
+from app.services.auth.AuthInterface import IAuthService
 
 SECRET_KEY = settings.SECRET_KEY
 ALGORITHM = settings.JWT_ALGORITHM
@@ -19,7 +21,36 @@ ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 class AuthService(IAuthService):
+    def _sanitize_input(self, text: str) -> str:
+        """Sanitize input to prevent XSS and injection attacks"""
+        if not text:
+            return ""
+        # HTML escape
+        sanitized = html.escape(text.strip())
+        # Remove potentially dangerous characters
+        sanitized = re.sub(r'[<>"\']', '', sanitized)
+        return sanitized
+    
+    def _validate_email_format(self, email: str) -> str:
+        """Additional email validation and sanitization"""
+        if not email:
+            raise HTTPException(status_code=400, detail="Email is required")
+        
+        # Basic email pattern validation
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_pattern, email):
+            raise HTTPException(status_code=400, detail="Invalid email format")
+        
+        # Convert to lowercase and strip
+        return email.lower().strip()
+    
     async def login(self, email: str, password: str, db):
+        # Sanitize inputs
+        email = self._validate_email_format(email)
+        
+        if not password or not password.strip():
+            raise HTTPException(status_code=400, detail="Password is required")
+        
         user = await get_user_by_email(db, email)
         if not user or not verify_password(password, user.hashed_password):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
@@ -36,10 +67,24 @@ class AuthService(IAuthService):
         }
 
     async def signup(self, data: dict, db):
-        user = await get_user_by_email(db, data["email"])
+        # Sanitize and validate inputs
+        email = self._validate_email_format(data.get("email", ""))
+        name = self._sanitize_input(data.get("name", ""))
+        password = data.get("password", "")
+        
+        # Additional validation
+        if not name or len(name.strip()) < 2:
+            raise HTTPException(status_code=400, detail="Name must be at least 2 characters long")
+        
+        if not password or len(password.strip()) < 8:
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
+        
+        # Check if user already exists
+        user = await get_user_by_email(db, email)
         if user:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User already exists")
-        hashed_password = get_password_hash(data["password"])
+        
+        hashed_password = get_password_hash(password)
         
         # Role is now required
         if "role" not in data:
@@ -52,15 +97,15 @@ class AuthService(IAuthService):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role")
             
         new_user = User(
-            name=data["name"],
-            email=data["email"],
+            name=name,
+            email=email,
             hashed_password=hashed_password,
             role=role
         )
         db.add(new_user)
         await db.commit()
         await db.refresh(new_user)
-        return str(new_user.user_id)
+        return new_user.user_id
 
     async def logout(self, token: str = None, db: AsyncSession = Depends(get_db)):
         if token:

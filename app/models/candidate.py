@@ -7,7 +7,7 @@ class Candidate(Base):
     __tablename__ = "candidates"
     
     # Primary key that references user_id
-    candidate_id = Column(Integer, ForeignKey("user.user_id"), primary_key=True)
+    candidate_id = Column(Integer, ForeignKey("users.user_id"), primary_key=True)
     
     # Resume content as text
     resume = Column(Text, nullable=True)
