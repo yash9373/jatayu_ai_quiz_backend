@@ -42,3 +42,21 @@ class CandidateApplicationBulkResponse(BaseModel):
     total: int
     success: int
     failed: int
+
+class CandidateApplicationUpdate(BaseModel):
+    resume_link: Optional[str] = None
+    test_id: Optional[int] = None
+    # Add other updatable fields as needed
+    resume_text: Optional[str] = None
+    parsed_resume: Optional[str] = None
+    resume_score: Optional[int] = None
+    skill_match_percentage: Optional[float] = None
+    experience_score: Optional[int] = None
+    education_score: Optional[int] = None
+    ai_reasoning: Optional[str] = None
+    is_shortlisted: Optional[bool] = None
+    shortlist_reason: Optional[str] = None
+    screening_completed_at: Optional[datetime] = None
+    notified_at: Optional[datetime] = None
+    applied_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None

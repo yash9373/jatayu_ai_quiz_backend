@@ -53,3 +53,15 @@ class CandidateApplicationRepository:
         for app in applications:
             await db.refresh(app)
         return applications
+
+    @staticmethod
+    async def delete_application(db: AsyncSession, application_id: int) -> bool:
+        result = await db.execute(
+            select(CandidateApplication).where(CandidateApplication.application_id == application_id)
+        )
+        application = result.scalar_one_or_none()
+        if not application:
+            return False
+        await db.delete(application)
+        await db.commit()
+        return True
