@@ -10,8 +10,8 @@ import openai
 from app.schemas.test_schema import SkillGraph, SkillNode
 from app.core.config import settings
 
-# Set OpenAI API key
-os.environ["OPENAI_API_KEY"] = "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"
+# Remove hardcoded API key and set from settings
+openai.api_key = settings.OPENAI_API_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,6 @@ class AIService:
     """AI Service for OpenAI integration following Single Responsibility Principle"""
     
     def __init__(self):
-        openai.api_key = os.environ["OPENAI_API_KEY"]
         self.model = "gpt-3.5-turbo"
     
     async def parse_job_description(self, job_description: str) -> Dict[str, Any]:
