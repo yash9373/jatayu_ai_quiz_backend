@@ -15,7 +15,7 @@ from datetime import datetime
 from app.services.ai_screening_service import AIScreeningService
 from sqlalchemy import insert
 from app.repositories.assessment_repo import AssessmentRepository
-from app.repositories.user_repo import get_user_by_email
+from app.repositories.user_repo import get_user_by_email, create_user
 from app.models.user import User, UserRole
 from app.core.security import get_password_hash
 import random
@@ -34,15 +34,7 @@ class CandidateApplicationService:
             generated_password = ''.join(random.choices(string.ascii_letters + string.digits + string.punctuation, k=12))
             hashed_password = get_password_hash(generated_password)
             name = data.name or data.email.split('@')[0]
-            new_user = User(
-                name=name,
-                email=data.email,
-                role=UserRole.candidate,
-                hashed_password=hashed_password
-            )
-            db.add(new_user)
-            await db.commit()
-            await db.refresh(new_user)
+            new_user = await create_user(db, name=name, email=data.email, hashed_password=hashed_password, role=UserRole.candidate)
             user_id = new_user.user_id
         else:
             user_id = user.user_id
@@ -110,6 +102,31 @@ class CandidateApplicationService:
             except Exception as e:
                 results.append({"error": str(e)})
                 failed += 1
+        return CandidateApplicationBulkResponse(results=results, total=len(bulk_data.applications), success=success, failed=failed)
+
+    async def process_bulk_applications_concurrent(self, db: AsyncSession, bulk_data: CandidateApplicationBulkCreate, max_concurrent: int = 10) -> CandidateApplicationBulkResponse:
+        import asyncio
+        semaphore = asyncio.Semaphore(max_concurrent)
+        results = []
+        success = 0
+        failed = 0
+
+        async def sem_task(app):
+            async with semaphore:
+                try:
+                    result = await self.process_single_application(db, app)
+                    return result
+                except Exception as e:
+                    return {"error": str(e)}
+
+        tasks = [sem_task(app) for app in bulk_data.applications]
+        all_results = await asyncio.gather(*tasks)
+        for result in all_results:
+            if "error" in result:
+                failed += 1
+            else:
+                success += 1
+            results.append(result)
         return CandidateApplicationBulkResponse(results=results, total=len(bulk_data.applications), success=success, failed=failed)
 
     def _download_and_extract_resume(self, resume_link: str) -> str:
