@@ -1,0 +1,264 @@
+# Environment Variables and Secrets
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+*.env
+
+# API Keys and Secrets (IMPORTANT: Never commit these!)
+openai_api_key.txt
+secret_keys/
+config/secrets/
+
+# Database Files
+*.db
+*.sqlite
+*.sqlite3
+recruitment.db
+AI_Quiz_db*
+database/
+*.sql
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+.ENV/
+pip-selfcheck.json
+
+# FastAPI/Uvicorn
+.uvicorn/
+uvicorn.log
+fastapi.log
+app.log
+
+# Alembic (Database Migrations) - Keep migration files but ignore temp files
+alembic/versions/__pycache__/
+*.pyc
+alembic.log
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Logs
+*.log
+logs/
+log/
+*.out
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Operating System
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# Testing Files - Your project specific test scripts
+test_*.py
+*_test.py
+testing/
+test_outputs/
+complete_backend_test.py
+quick_api_test.py
+assessment_test.py
+create_test_user.py
+check_*.py
+
+# PowerShell test scripts
+*.ps1
+
+# Test collections
+*.postman_collection.json
+
+# Cleanup scripts
+delete_*.sh
+*_cleanup.*
+
+# Backup files
+*.bak
+*.backup
+*.orig
+
+# Documentation builds
+docs/_build/
+docs/build/
+site/
+
+# Package manager logs (NOT requirements.txt - keep that tracked!)
+pip-log.txt
+pip-delete-this-directory.txt
+
+# PyCharm
+.spyderproject
+.spyproject
+
+# Rope
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# Node.js (if you add frontend later)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Docker
+.dockerignore
+Dockerfile
+docker-compose.yml
+docker-compose.override.yml
+
+# Cloud deployment
+.serverless/
+.aws/
+.azure/
+.gcp/
+
+# Local development files
+local_settings.py
+development.py
+
+# Migration backups
+migrations_backup/
+schema_backup/
+
+# SSL certificates
+*.pem
+*.key
+*.crt
+*.cert
+*.p12
+
+# Email templates (if any)
+email_templates/
+
+# Static files (if serving static content)
+static/
+media/
+uploads/
+
+# Cache
+.cache/
+cache/
+
+# Monitoring and profiling
+*.prof
+*.pstats
+
+# Security scan results
+.bandit
+.safety
+
+# Local configuration overrides
+local_config.py
+override_settings.py
+
+# IMPORTANT: requirements.txt is NOT ignored - it should be tracked in git!
+# This file contains your project dependencies and is essential for deployment
+*.pstats
+
+# Security scan results
+.bandit
+.safety
+
+# Local configuration overrides
+local_config.py
+override_settings.py
+
+# Testing Files (Add these to ignore test scripts)
+test_*.py
+*_test.py
+testing/
+test_outputs/
+complete_backend_test.py
+quick_api_test.py
+assessment_test.py
+create_test_user.py
+check_*.py
+
+# Test data and databases
+*.db
+AI_Quiz_db*
+recruitment.db
+
+# PowerShell test scripts
+*.ps1
+
+# Test collections
+*.postman_collection.json
+
+# Cleanup scripts
+delete_*.sh
+*_cleanup.*
