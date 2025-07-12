@@ -5,20 +5,22 @@
 .env.test
 .env.production
 *.env
-
-# API Keys and Secrets (IMPORTANT: Never commit these!)
 openai_api_key.txt
 secret_keys/
 config/secrets/
+local_config.py
+override_settings.py
 
 # Database Files
 *.db
 *.sqlite
 *.sqlite3
-recruitment.db
-AI_Quiz_db*
-database/
 *.sql
+AI_Quiz_db*
+recruitment.db
+database/
+migrations_backup/
+schema_backup/
 
 # Python
 __pycache__/
@@ -54,13 +56,13 @@ venv.bak/
 .ENV/
 pip-selfcheck.json
 
-# FastAPI/Uvicorn
+# FastAPI/Uvicorn Logs
 .uvicorn/
 uvicorn.log
 fastapi.log
 app.log
 
-# Alembic (Database Migrations) - Keep migration files but ignore temp files
+# Alembic
 alembic/versions/__pycache__/
 *.pyc
 alembic.log
@@ -83,8 +85,9 @@ coverage.xml
 *.swp
 *.swo
 *~
-.DS_Store
-Thumbs.db
+.spyderproject
+.spyproject
+.ropeproject
 
 # Jupyter Notebooks
 .ipynb_checkpoints/
@@ -102,77 +105,77 @@ temp/
 *.tmp
 *.temp
 
-# Operating System
+# OS Files
 .DS_Store?
 ._*
 .Spotlight-V100
 .Trashes
 ehthumbs.db
+Thumbs.db
 
-# Testing Files - Your project specific test scripts
-test_*.py
-*_test.py
-testing/
-test_outputs/
+# Test Scripts
+
 complete_backend_test.py
 quick_api_test.py
 assessment_test.py
 create_test_user.py
 check_*.py
-
-# PowerShell test scripts
 *.ps1
-
-# Test collections
 *.postman_collection.json
 
-# Cleanup scripts
+# Cleanup Scripts
 delete_*.sh
 *_cleanup.*
 
-# Backup files
+# Backup Files
 *.bak
 *.backup
 *.orig
 
-# Documentation builds
+# Documentation Builds
 docs/_build/
 docs/build/
 site/
 
-# Package manager logs (NOT requirements.txt - keep that tracked!)
+# Package Manager Logs
 pip-log.txt
 pip-delete-this-directory.txt
 
-# PyCharm
-.spyderproject
-.spyproject
-
-# Rope
-.ropeproject
-
-# mkdocs documentation
+# mkdocs
 /site
 
-# mypy
+# Static/Media Files
+static/
+media/
+uploads/
+
+# SSL Certificates
+*.pem
+*.key
+*.crt
+*.cert
+*.p12
+
+# Email Templates
+email_templates/
+
+# Cache
+.cache/
+cache/
+
+# Monitoring and Profiling
+*.prof
+*.pstats
+
+# Type Checking and Security Scanning
 .mypy_cache/
 .dmypy.json
 dmypy.json
-
-# Pyre type checker
 .pyre/
-
-# pytype static type analyzer
 .pytype/
-
-# Cython debug symbols
 cython_debug/
-
-# Node.js (if you add frontend later)
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+.bandit
+.safety
 
 # Docker
 .dockerignore
@@ -180,77 +183,12 @@ Dockerfile
 docker-compose.yml
 docker-compose.override.yml
 
-# Cloud deployment
+# Cloud Deployment
 .serverless/
 .aws/
 .azure/
 .gcp/
 
-# Local development files
+# Local Settings
 local_settings.py
 development.py
-
-# Migration backups
-migrations_backup/
-schema_backup/
-
-# SSL certificates
-*.pem
-*.key
-*.crt
-*.cert
-*.p12
-
-# Email templates (if any)
-email_templates/
-
-# Static files (if serving static content)
-static/
-media/
-uploads/
-
-# Cache
-.cache/
-cache/
-
-# Monitoring and profiling
-*.prof
-*.pstats
-
-# Security scan results
-.bandit
-.safety
-
-# Local configuration overrides
-local_config.py
-override_settings.py
-
-# IMPORTANT: requirements.txt is NOT ignored - it should be tracked in git!
-# This file contains your project dependencies and is essential for deployment
-*.pstats
-
-# Security scan results
-.bandit
-.safety
-
-# Local configuration overrides
-local_config.py
-override_settings.py
-
-# Testing Files (Add these to ignore test scripts)
-complete_backend_test.py
-quick_api_test.py
-assessment_test.py
-create_test_user.py
-check_*.py
-
-
-# PowerShell test scripts
-*.ps1
-
-# Test collections
-*.postman_collection.json
-
-# Cleanup scripts
-delete_*.sh
-*_cleanup.*
