@@ -238,20 +238,12 @@ local_config.py
 override_settings.py
 
 # Testing Files (Add these to ignore test scripts)
-test_*.py
-*_test.py
-testing/
-test_outputs/
 complete_backend_test.py
 quick_api_test.py
 assessment_test.py
 create_test_user.py
 check_*.py
 
-# Test data and databases
-*.db
-AI_Quiz_db*
-recruitment.db
 
 # PowerShell test scripts
 *.ps1
