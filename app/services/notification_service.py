@@ -180,6 +180,30 @@ class NotificationService:
         
         logger.info(f"[NOTIFICATION] AI processing {status} notification for {creator.email}")
         print(message)
+    
+    async def notify_test_deleted(self, test_name: str, test_id: int, recruiter_email: str) -> None:
+        """Send notification when test is deleted"""
+        message = f"""
+        📧 EMAIL NOTIFICATION (Mock)
+        
+        To: {recruiter_email}
+        Subject: Test Deleted - {test_name}
+        
+        Your test "{test_name}" (ID: {test_id}) has been deleted successfully.
+        
+        This action cannot be undone.
+        
+        Best regards,
+        Jatayu Team
+        """
+        
+        logger.info(f"[NOTIFICATION] Test deleted notification for {recruiter_email}")
+        print(message)
+    
+    @staticmethod
+    async def notify_candidate_shortlisted(db, application):
+        # Mock notification for candidate shortlisting
+        print(f"[NOTIFICATION] Candidate {application.user.email if application.user else 'Unknown'} shortlisted for test {application.test_id} (score: {application.resume_score})")
 
 # Singleton instance
 notification_service = NotificationService()

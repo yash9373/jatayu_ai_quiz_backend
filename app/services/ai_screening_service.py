@@ -17,7 +17,7 @@ except ImportError:
     DOCX_AVAILABLE = False
 
 try:
-    import openai
+    from openai import OpenAI
     AI_AVAILABLE = True
 except ImportError:
     AI_AVAILABLE = False
@@ -34,7 +34,7 @@ class AIScreeningService:
         self.api_key = os.getenv("OPENAI_API_KEY")
         self.ai_enabled = bool(self.api_key and self.api_key != "your-openai-api-key-here" and AI_AVAILABLE)
         if self.ai_enabled:
-            openai.api_key = self.api_key
+            self.client = OpenAI(api_key=self.api_key)
 
     def extract_text_from_file(self, file_path: str) -> str:
         if not file_path or not os.path.exists(file_path):
@@ -76,7 +76,7 @@ Resume:
         if not self.ai_enabled:
             return self._screen_resume_mock(resume_text, job_description)
         try:
-            response = openai.ChatCompletion.create(
+            response = self.client.chat.completions.create(
                 model="gpt-4",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2

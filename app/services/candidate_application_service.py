@@ -9,7 +9,8 @@ from app.models.candidate_application import CandidateApplication
 from app.models.assessment import Assessment
 from app.schemas.candidate_application_schema import (
     CandidateApplicationCreate, CandidateApplicationBulkCreate,
-    CandidateApplicationResponse, CandidateApplicationBulkResponse
+    CandidateApplicationResponse, CandidateApplicationBulkResponse,
+    CandidateApplicationSummaryResponse
 )
 from datetime import datetime
 from app.services.ai_screening_service import AIScreeningService
@@ -53,7 +54,8 @@ class CandidateApplicationService:
             resume_text=resume_text,
             job_description=test.job_description,
             parsed_job_description=test.parsed_job_description,
-            skill_graph=test.skill_graph
+            skill_graph=test.skill_graph,
+            min_resume_score=test.resume_score_threshold if test.auto_shortlist else None
         )
         # Prepare DB data
         app_data = data.dict()
@@ -82,10 +84,33 @@ class CandidateApplicationService:
         # Auto-shortlist logic: if enabled and shortlisted, insert into assessment
         if ai_result.get("is_shortlisted"):
             await self._insert_assessment(db, application)
-        response = CandidateApplicationResponse.from_orm(application).dict()
+        
+        # Prepare response with user information
+        response_dict = {
+            "application_id": application.application_id,
+            "user_id": application.user_id,
+            "test_id": application.test_id,
+            "resume_link": application.resume_link,
+            "resume_text": application.resume_text,
+            "parsed_resume": application.parsed_resume,
+            "resume_score": application.resume_score,
+            "skill_match_percentage": application.skill_match_percentage,
+            "experience_score": application.experience_score,
+            "education_score": application.education_score,
+            "ai_reasoning": application.ai_reasoning,
+            "is_shortlisted": application.is_shortlisted,
+            "shortlist_reason": application.shortlist_reason,
+            "screening_completed_at": application.screening_completed_at,
+            "notified_at": application.notified_at,
+            "applied_at": application.applied_at,
+            "updated_at": application.updated_at,
+            "candidate_name": data.name or data.email.split('@')[0],
+            "candidate_email": data.email
+        }
+        
         if generated_password:
-            response["generated_password"] = generated_password
-        return response
+            response_dict["generated_password"] = generated_password
+        return response_dict
 
     async def process_bulk_applications(self, db: AsyncSession, bulk_data: CandidateApplicationBulkCreate) -> CandidateApplicationBulkResponse:
         results = []
@@ -161,3 +186,112 @@ class CandidateApplicationService:
             user_id=application.user_id,
             test_id=application.test_id
         )
+
+    async def get_applications_by_test_id(self, db: AsyncSession, test_id: int) -> List[CandidateApplicationResponse]:
+        """Get all candidate applications for a specific test."""
+        applications = await CandidateApplicationRepository.get_applications_by_test_id(db, test_id)
+        
+        response_list = []
+        for app in applications:
+            # Convert to dict and add user information
+            app_dict = {
+                "application_id": app.application_id,
+                "user_id": app.user_id,
+                "test_id": app.test_id,
+                "resume_link": app.resume_link,
+                "resume_text": app.resume_text,
+                "parsed_resume": app.parsed_resume,
+                "resume_score": app.resume_score,
+                "skill_match_percentage": app.skill_match_percentage,
+                "experience_score": app.experience_score,
+                "education_score": app.education_score,
+                "ai_reasoning": app.ai_reasoning,
+                "is_shortlisted": app.is_shortlisted,
+                "shortlist_reason": app.shortlist_reason,
+                "screening_completed_at": app.screening_completed_at,
+                "notified_at": app.notified_at,
+                "applied_at": app.applied_at,
+                "updated_at": app.updated_at,
+                "candidate_name": app.user.name if app.user else None,
+                "candidate_email": app.user.email if app.user else None
+            }
+            response_list.append(CandidateApplicationResponse(**app_dict))
+        
+        return response_list
+
+    async def get_applications_summary_by_test_id(self, db: AsyncSession, test_id: int) -> List[CandidateApplicationSummaryResponse]:
+        """Get minimal summary of candidate applications for a specific test."""
+        from app.schemas.candidate_application_schema import CandidateApplicationSummaryResponse
+        applications = await CandidateApplicationRepository.get_applications_by_test_id_with_user(db, test_id)
+        
+        response_list = []
+        for app in applications:
+            app_dict = {
+                "candidate_name": app.user.name if app.user else "Unknown",
+                "candidate_email": app.user.email if app.user else "Unknown",
+                "resume_link": app.resume_link,
+                "resume_score": app.resume_score,
+                "is_shortlisted": app.is_shortlisted
+            }
+            response_list.append(CandidateApplicationSummaryResponse(**app_dict))
+        
+        return response_list
+
+    async def get_single_application_with_user(self, db: AsyncSession, application_id: int) -> Optional[CandidateApplicationResponse]:
+        """Get a single application with full details including user information."""
+        application = await CandidateApplicationRepository.get_application_with_user_by_id(db, application_id)
+        if not application:
+            return None
+        
+        return CandidateApplicationResponse(
+            application_id=application.application_id,
+            user_id=application.user_id,
+            test_id=application.test_id,
+            resume_link=application.resume_link,
+            resume_text=application.resume_text,
+            parsed_resume=application.parsed_resume,
+            resume_score=application.resume_score,
+            skill_match_percentage=application.skill_match_percentage,
+            experience_score=application.experience_score,
+            education_score=application.education_score,
+            ai_reasoning=application.ai_reasoning,
+            is_shortlisted=application.is_shortlisted,
+            shortlist_reason=application.shortlist_reason,
+            screening_completed_at=application.screening_completed_at,
+            notified_at=application.notified_at,
+            applied_at=application.applied_at,
+            updated_at=application.updated_at,
+            candidate_name=application.user.name,
+            candidate_email=application.user.email
+        )
+
+    async def shortlist_bulk_candidates(self, db: AsyncSession, test_id: int, min_score: int):
+        from app.repositories.candidate_application_repo import CandidateApplicationRepository
+        from app.services.notification_service import NotificationService
+        # Get all applications for the test (with user info)
+        applications = await CandidateApplicationRepository.get_applications_by_test_id_with_user(db, test_id)
+        shortlisted = []
+        notified_count = 0
+        for app in applications:
+            should_shortlist = app.resume_score is not None and app.resume_score >= min_score
+            was_shortlisted = app.is_shortlisted
+            app.is_shortlisted = should_shortlist
+            db.add(app)
+            if should_shortlist:
+                shortlisted.append({
+                    "candidate_email": app.user.email if app.user else None,
+                    "resume_score": app.resume_score
+                })
+                # Notify only if newly shortlisted
+                if not was_shortlisted:
+                    try:
+                        await NotificationService.notify_candidate_shortlisted(db, app)
+                        notified_count += 1
+                    except Exception:
+                        pass
+        await db.commit()
+        return {
+            "shortlisted": shortlisted,
+            "notified": notified_count,
+            "message": f"{notified_count} candidates shortlisted and notified."
+        }

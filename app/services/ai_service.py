@@ -53,7 +53,7 @@ class AIService:
             Only return valid JSON, no additional text.
             """
             
-            response = openai.ChatCompletion.create(
+            response = openai.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": "You are a expert HR assistant that parses job descriptions into structured data. Always return valid JSON."},
@@ -127,7 +127,7 @@ class AIService:
             Only return valid JSON, no additional text.
             """
             
-            response = openai.ChatCompletion.create(
+            response = openai.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": "You are an expert technical recruiter who creates skill hierarchies for job requirements. Always return valid JSON."},

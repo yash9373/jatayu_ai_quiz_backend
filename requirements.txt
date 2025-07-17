@@ -9,3 +9,4 @@ pydantic-settings
 python-dotenv
 alembic
 email-validator
+fastapi-cors

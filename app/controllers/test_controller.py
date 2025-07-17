@@ -40,19 +40,15 @@ async def get_all_tests(
     current_user: User = Depends(recruiter_required),  # Recruiters only
     db: AsyncSession = Depends(get_db)
 ):
-    """Get all tests with pagination (recruiters only)"""
-    return await test_service.get_all_tests(db=db, skip=skip, limit=limit)
-
-@router.get("/my-tests", response_model=List[TestSummary])
-async def get_my_tests(
-    current_user: User = Depends(recruiter_required),  # Recruiters only
-    db: AsyncSession = Depends(get_db)
-):
-    """Get tests created by the current user (recruiters only)"""
+    """Get tests created by the current user only (owner only)"""
     return await test_service.get_tests_by_creator(
         creator_id=current_user.user_id,
-        db=db
+        db=db,
+        skip=skip,
+        limit=limit
     )
+
+
 
 @router.get("/{test_id}", response_model=TestResponse)
 async def get_test_by_id(
@@ -126,65 +122,6 @@ async def get_all_tests_for_recruiters(
     return await test_service.get_all_tests(skip=skip, limit=limit, db=db)
 
 # Additional endpoints for test lifecycle management
-
-@router.get("/{test_id}", response_model=TestResponse)
-async def get_test_by_id(
-    test_id: int,
-    current_user: User = Depends(recruiter_required),
-    db: AsyncSession = Depends(get_db)
-):
-    """Get a specific test by ID (owner only)"""
-    test = await test_service.get_test_by_id(test_id=test_id, db=db)
-    
-    # Check if user is the owner
-    if test.created_by != current_user.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only access your own tests"
-        )
-    
-    return test
-
-@router.put("/{test_id}", response_model=TestResponse)
-async def update_test(
-    test_id: int,
-    test_data: TestUpdate,
-    current_user: User = Depends(recruiter_required),
-    db: AsyncSession = Depends(get_db)
-):
-    """Update a test (owner only)"""
-    # Check ownership first
-    existing_test = await test_service.get_test_by_id(test_id=test_id, db=db)
-    if existing_test.created_by != current_user.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only update your own tests"
-        )
-    
-    return await test_service.update_test(
-        test_id=test_id,
-        test_data=test_data,
-        updated_by=current_user.user_id,
-        db=db
-    )
-
-@router.delete("/{test_id}")
-async def delete_test(
-    test_id: int,
-    current_user: User = Depends(recruiter_required),
-    db: AsyncSession = Depends(get_db)
-):
-    """Delete a test (owner only)"""
-    # Check ownership first
-    existing_test = await test_service.get_test_by_id(test_id=test_id, db=db)
-    if existing_test.created_by != current_user.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only delete your own tests"
-        )
-    
-    await test_service.delete_test(test_id=test_id, db=db)
-    return {"message": "Test deleted successfully"}
 
 @router.post("/{test_id}/schedule")
 async def schedule_test(

@@ -1,5 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, insert
+from sqlalchemy.orm import selectinload
 from typing import Optional, List, Dict, Any
 from app.models.candidate_application import CandidateApplication
 from datetime import datetime
@@ -65,3 +66,45 @@ class CandidateApplicationRepository:
         await db.delete(application)
         await db.commit()
         return True
+
+    @staticmethod
+    async def get_applications_by_test_id(db: AsyncSession, test_id: int) -> List[CandidateApplication]:
+        """Get all candidate applications for a specific test."""
+        result = await db.execute(
+            select(CandidateApplication).where(CandidateApplication.test_id == test_id)
+        )
+        return result.scalars().all()
+
+    @staticmethod
+    async def get_application_with_user_by_id(db: AsyncSession, application_id: int) -> Optional[CandidateApplication]:
+        """Get a single application with user information."""
+        from app.models.user import User
+        result = await db.execute(
+            select(CandidateApplication)
+            .options(selectinload(CandidateApplication.user))
+            .where(CandidateApplication.application_id == application_id)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_applications_by_test_id_with_user(db: AsyncSession, test_id: int) -> List[CandidateApplication]:
+        """Get all candidate applications for a specific test with user information."""
+        from sqlalchemy.orm import selectinload
+        result = await db.execute(
+            select(CandidateApplication)
+            .where(CandidateApplication.test_id == test_id)
+            .options(selectinload(CandidateApplication.user))
+        )
+        return result.scalars().all()
+
+    @staticmethod
+    async def get_applications_for_shortlisting(db: AsyncSession, test_id: int, min_score: int):
+        from sqlalchemy.orm import selectinload
+        from app.models.candidate_application import CandidateApplication
+        result = await db.execute(
+            select(CandidateApplication)
+            .where(CandidateApplication.test_id == test_id)
+            .where(CandidateApplication.resume_score >= min_score)
+            .options(selectinload(CandidateApplication.user))
+        )
+        return result.scalars().all()

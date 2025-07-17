@@ -269,7 +269,7 @@ class TestService:
         """Get tests created by a specific user"""
         try:
             repo = TestRepository(db)
-            tests = await repo.get_tests_by_creator(creator_id=creator_id, skip=skip, limit=limit)
+            tests = await repo.get_tests_by_recruiter(recruiter_id=creator_id, skip=skip, limit=limit)
             
             # Get creator info once
             creator = await self._get_user_by_id(creator_id, db)

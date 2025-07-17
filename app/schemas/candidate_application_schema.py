@@ -33,6 +33,8 @@ class CandidateApplicationBulkCreate(BaseModel):
 
 class CandidateApplicationResponse(CandidateApplicationBase):
     application_id: int
+    candidate_name: Optional[str] = None
+    candidate_email: Optional[str] = None
     class Config:
         from_attributes = True
         orm_mode = True
@@ -60,3 +62,14 @@ class CandidateApplicationUpdate(BaseModel):
     notified_at: Optional[datetime] = None
     applied_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+class CandidateApplicationSummaryResponse(BaseModel):
+    """Minimal response with only essential candidate information"""
+    candidate_name: str
+    candidate_email: str
+    resume_link: str
+    resume_score: Optional[int] = None
+    is_shortlisted: Optional[bool] = None
+    
+    class Config:
+        from_attributes = True
