@@ -20,7 +20,12 @@ class AIService:
     """AI Service for OpenAI integration following Single Responsibility Principle"""
     
     def __init__(self):
-        openai.api_key = os.environ["OPENAI_API_KEY"]
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key or api_key == "your-openai-api-key-here":
+            logger.warning("OPENAI_API_KEY is missing or not set properly! AI features will not work.")
+        elif not api_key.startswith("sk-"):
+            logger.warning("OPENAI_API_KEY does not look like a valid OpenAI key.")
+        openai.api_key = api_key
         self.model = "gpt-3.5-turbo"
     
     async def parse_job_description(self, job_description: str) -> Dict[str, Any]:
@@ -32,12 +37,13 @@ class AIService:
             state = JDState(raw_job_description=job_description)
             result_state = jd_parsing_graph.invoke(state)
             if result_state.get("error"):
-                raise Exception(result_state["error"])
+                logger.error(f"JD Parsing error: {result_state['error']}")
+                return {"error": result_state["error"]}
             parsed = result_state.get("parsed_job_description")
             return parsed.model_dump() if parsed and hasattr(parsed, 'model_dump') else parsed or {}
         except Exception as e:
-            logger.error(f"Error parsing job description: {str(e)}")
-            return {"error": str(e)}
+            logger.error(f"Exception in parse_job_description: {str(e)}", exc_info=True)
+            return {"error": f"Exception: {str(e)}"}
 
     async def generate_skill_graph(self, parsed_job_description: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -49,14 +55,15 @@ class AIService:
             state = SkillGraphState(raw_job_description=jd_text)
             result_state = skill_graph_generation_graph.invoke(state)
             if result_state.get("error"):
-                raise Exception(result_state["error"])
+                logger.error(f"Skill Graph Generation error: {result_state['error']}")
+                return {"error": result_state["error"]}
             skill_graph = result_state.get("skill_graph")
             output = skill_graph.model_dump() if skill_graph and hasattr(skill_graph, 'model_dump') else skill_graph or {}
             print("[DEBUG] Skill graph output:", json.dumps(output, indent=2))  # Debug print
             return output
         except Exception as e:
-            logger.error(f"Error generating skill graph: {str(e)}")
-            return {"error": str(e)}
+            logger.error(f"Exception in generate_skill_graph: {str(e)}", exc_info=True)
+            return {"error": f"Exception: {str(e)}"}
 
     async def process_job_description(self, job_description: str) -> tuple[Dict[str, Any], Dict[str, Any]]:
         """
