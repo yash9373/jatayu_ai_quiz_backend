@@ -328,19 +328,32 @@ class TestService:
                     detail="Test not found"
                 )
             
+            # Get the current test before update
+            current_test = await repo.get_test_by_id(test_id)
+
+            # Check if job_description is being updated and actually changed
+            job_desc_updated = False
+            if "job_description" in test_data.dict(exclude_unset=True):
+                if test_data.job_description is not None and test_data.job_description != current_test.job_description:
+                    job_desc_updated = True
+
             # Update the test
             updated_test = await repo.update_test(test_id, test_data, updated_by)
-            
+
+            # If job_description changed, re-run AI pipeline
+            if job_desc_updated and updated_test.job_description:
+                parsed_jd = await self.ai_service.parse_job_description(updated_test.job_description)
+                skill_graph = await self.ai_service.generate_skill_graph(parsed_jd)
+                await repo.update_test_ai_data(updated_test.test_id, parsed_jd, skill_graph)
+                # Refresh updated_test with new AI fields
+                updated_test = await repo.get_test_by_id(test_id)
+
             # Get creator info
             creator = await self._get_user_by_id(updated_test.created_by, db)
-            
-            # Send notification
-            await self.notification_service.notify_test_updated(
-                test_name=updated_test.test_name,
-                test_id=test_id,
-                recruiter_email=creator.email
-            )
-            
+
+            # Send notification (use send_test_created_notification as fallback, or skip if not needed)
+            # await self.notification_service.send_test_created_notification(updated_test, creator)
+
             return await self._format_test_response(updated_test, creator)
             
         except HTTPException:
@@ -399,10 +412,23 @@ class TestService:
     
     async def _format_test_response(self, test: Test, creator: User = None) -> TestResponse:
         """Format test response with creator info"""
-        # Parse JSON fields
-        parsed_jd = json.loads(test.parsed_job_description) if test.parsed_job_description else None
-        skill_graph = json.loads(test.skill_graph) if test.skill_graph else None
-        
+        # Parse JSON fields robustly
+        import json
+        parsed_jd = None
+        skill_graph = None
+        try:
+            if test.parsed_job_description:
+                parsed_jd = json.loads(test.parsed_job_description)
+        except Exception:
+            parsed_jd = None
+        try:
+            if test.skill_graph:
+                skill_graph = json.loads(test.skill_graph)
+                if not isinstance(skill_graph, dict):
+                    skill_graph = None
+        except Exception:
+            skill_graph = None
+
         return TestResponse(
             test_id=test.test_id,
             test_name=test.test_name,

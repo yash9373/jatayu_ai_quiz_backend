@@ -33,9 +33,10 @@ class TestRepository:
                 total_questions=test_data.total_questions,
                 time_limit_minutes=test_data.time_limit_minutes,
                 total_marks=test_data.total_marks,
-                scheduled_at=test_data.scheduled_at,
-                application_deadline=test_data.application_deadline,
-                assessment_deadline=test_data.assessment_deadline,
+                question_distribution=test_data.question_distribution if test_data.question_distribution else None,
+                scheduled_at=None,
+                application_deadline=None,
+                assessment_deadline=None,
                 created_by=created_by,
                 status=TestStatus.DRAFT.value
             )
@@ -100,13 +101,17 @@ class TestRepository:
             # Update fields
             update_data = test_data.dict(exclude_unset=True)
             for field, value in update_data.items():
-                setattr(test, field, value)
-            
+                if field == "question_distribution" and value is not None:
+                    import json
+                    test.question_distribution = json.dumps(value)
+                else:
+                    setattr(test, field, value)
+
             test.updated_by = updated_by
-            
+
             await self.db.commit()
             await self.db.refresh(test)
-            
+
             logger.info(f"Updated test {test_id} by user {updated_by}")
             return test
             

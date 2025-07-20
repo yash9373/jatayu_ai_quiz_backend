@@ -46,6 +46,10 @@ class Test(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     
+    # Question distribution (HML)
+    from sqlalchemy import JSON
+    question_distribution = Column(JSON, nullable=True)  # Store as native JSON
+
     # Relationships
     creator = relationship("User", foreign_keys=[created_by])
     updater = relationship("User", foreign_keys=[updated_by])

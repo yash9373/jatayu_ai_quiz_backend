@@ -7,7 +7,7 @@ from app.models.test import TestStatus
 # Base schemas for different operations
 class TestBase(BaseModel):
     test_name: str = Field(..., min_length=3, max_length=200, description="Name of the test")
-    job_description: Optional[str] = Field(None, max_length=10000, description="Job description")
+    job_description: str = Field(..., max_length=10000, description="Job description")
     
     @validator('test_name')
     def validate_test_name(cls, v):
@@ -19,15 +19,11 @@ class TestCreate(TestBase):
     # Test configuration
     resume_score_threshold: Optional[int] = Field(None, ge=0, le=100)
     max_shortlisted_candidates: Optional[int] = Field(None, ge=1, le=1000)
-    auto_shortlist: bool = Field(False, description="Auto shortlist candidates")
-    total_questions: Optional[int] = Field(None, ge=1, le=200)
-    time_limit_minutes: Optional[int] = Field(None, ge=5, le=480)  # 5 min to 8 hours
-    total_marks: Optional[int] = Field(None, ge=1, le=1000)
-    
-    # Scheduling
-    scheduled_at: Optional[datetime] = Field(None, description="When to publish the test")
-    application_deadline: Optional[datetime] = Field(None, description="Application deadline")
-    assessment_deadline: Optional[datetime] = Field(None, description="Assessment deadline")
+    auto_shortlist: bool = Field(..., description="Auto shortlist candidates")
+    total_questions: int = Field(..., ge=1, le=200)
+    time_limit_minutes: int = Field(..., ge=5, le=480)  # 5 min to 8 hours
+    total_marks: int = Field(..., ge=1, le=1000)
+    question_distribution: Dict[str, int] = Field(..., description="Question distribution: {low, medium, high}")
 
 class TestUpdate(BaseModel):
     test_name: Optional[str] = Field(None, min_length=3, max_length=200)
@@ -41,6 +37,7 @@ class TestUpdate(BaseModel):
     scheduled_at: Optional[datetime] = None
     application_deadline: Optional[datetime] = None
     assessment_deadline: Optional[datetime] = None
+    question_distribution: Optional[Dict[str, int]] = None  # JSON object: {"low": int, "medium": int, "high": int}
 
 class TestSchedule(BaseModel):
     scheduled_at: datetime = Field(..., description="When to publish the test")
