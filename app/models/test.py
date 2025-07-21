@@ -4,12 +4,11 @@ from app.db.base import Base
 from enum import Enum
 
 class TestStatus(str, Enum):
+    PREPARING = "preparing"
     DRAFT = "draft"
     SCHEDULED = "scheduled"
-    PUBLISHED = "published"
-    PAUSED = "paused"
-    COMPLETED = "completed"
-    ARCHIVED = "archived"
+    LIVE = "live"
+    ENDED = "ended"
 
 class Test(Base):
     __tablename__ = "tests"
@@ -32,11 +31,13 @@ class Test(Base):
     total_marks = Column(Integer, nullable=True)
     
     # Status and publishing
-    status = Column(String(20), default=TestStatus.DRAFT.value)
+    from sqlalchemy.dialects.postgresql import ENUM
+    status = Column(ENUM('preparing', 'draft', 'scheduled', 'live', 'ended', name='teststatus', create_type=False), default=TestStatus.DRAFT.value, nullable=False)
     is_published = Column(Boolean, default=False)
     
     # Scheduling
     scheduled_at = Column(DateTime(timezone=True), nullable=True)
+    # started_at and ended_at removed; use scheduled_at and assessment_deadline instead
     application_deadline = Column(DateTime(timezone=True), nullable=True)
     assessment_deadline = Column(DateTime(timezone=True), nullable=True)
     

@@ -3,7 +3,10 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 from app.models.user import UserRole
 from app.models.test import TestStatus
-
+class TestSchedule(BaseModel):
+    scheduled_at: datetime = Field(..., description="When to publish the test")
+    application_deadline: Optional[datetime] = None
+    assessment_deadline: Optional[datetime] = None
 # Base schemas for different operations
 class TestBase(BaseModel):
     test_name: str = Field(..., min_length=3, max_length=200, description="Name of the test")

@@ -9,10 +9,14 @@ async def get_dashboard_summary(db: AsyncSession, recruiter_id: int):
     test_query = select(Test).where(Test.created_by == recruiter_id)
     tests = (await db.execute(test_query)).scalars().all()
 
-    scheduled_tests = sum(1 for t in tests if t.status == 'scheduled')
-    completed_tests = sum(1 for t in tests if t.status == 'completed')
     draft_tests = sum(1 for t in tests if t.status == 'draft')
-    ongoing_tests = sum(1 for t in tests if t.status == 'ongoing')
+    preparing_tests = sum(1 for t in tests if t.status == 'preparing')
+    scheduled_tests = sum(1 for t in tests if t.status == 'scheduled')
+    live_tests = sum(1 for t in tests if t.status == 'live')
+    ended_tests = sum(1 for t in tests if t.status == 'ended')
+    # For dashboard, ongoing = live, completed = ended
+    ongoing_tests = live_tests
+    completed_tests = ended_tests
     total_tests = len(tests)
     active_tests = ongoing_tests + scheduled_tests
     avg_duration = int(sum(t.time_limit_minutes or 0 for t in tests) / total_tests) if total_tests else 0
@@ -34,9 +38,10 @@ async def get_dashboard_summary(db: AsyncSession, recruiter_id: int):
     # Test distribution
     test_distribution = [
         {"label": "Draft", "count": draft_tests},
-        {"label": "Ongoing", "count": ongoing_tests},
+        {"label": "Preparing", "count": preparing_tests},
         {"label": "Scheduled", "count": scheduled_tests},
-        {"label": "Completed", "count": completed_tests}
+        {"label": "Live", "count": live_tests},
+        {"label": "Ended", "count": ended_tests}
     ]
 
     # Total candidates
@@ -44,14 +49,21 @@ async def get_dashboard_summary(db: AsyncSession, recruiter_id: int):
     total_candidates = (await db.execute(candidate_query)).scalar() or 0
 
     return {
+        "draft_tests": draft_tests,
+        "preparing_tests": preparing_tests,
         "scheduled_tests": scheduled_tests,
+        "live_tests": live_tests,
+        "ended_tests": ended_tests,
         "total_candidates": total_candidates,
-        "completed_tests": completed_tests,
         "recent_tests": recent_tests_data,
         "test_distribution": test_distribution,
         "quick_stats": {
-            "active_tests": active_tests,
+            "active_tests": live_tests + scheduled_tests,
             "draft_tests": draft_tests,
+            "preparing_tests": preparing_tests,
+            "scheduled_tests": scheduled_tests,
+            "live_tests": live_tests,
+            "ended_tests": ended_tests,
             "avg_duration_minutes": avg_duration,
             "total_tests": total_tests
         }

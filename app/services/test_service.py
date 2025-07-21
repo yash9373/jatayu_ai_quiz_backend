@@ -14,6 +14,25 @@ import logging
 logger = logging.getLogger(__name__)
 
 class TestService:
+    async def schedule_test(self, test_id: int, schedule_data: TestSchedule, updated_by: int, db: AsyncSession) -> TestResponse:
+        """Schedule a test: set scheduled_at, change status to scheduled"""
+        repo = TestRepository(db)
+        test = await repo.get_test_by_id(test_id)
+        if not test:
+            raise HTTPException(status_code=404, detail="Test not found")
+        # Only allow scheduling if test is in draft
+        if test.status != TestStatus.DRAFT.value:
+            raise HTTPException(status_code=400, detail="Test can only be scheduled from draft state")
+        # Update schedule fields
+        test.scheduled_at = schedule_data.scheduled_at
+        test.application_deadline = schedule_data.application_deadline
+        test.assessment_deadline = schedule_data.assessment_deadline
+        test.status = TestStatus.SCHEDULED.value
+        test.updated_by = updated_by
+        await db.commit()
+        await db.refresh(test)
+        creator = await self._get_user_by_id(test.created_by, db)
+        return await self._format_test_response(test, creator)
     """Test Service with AI integration and notifications"""
     
     def __init__(self):
@@ -65,33 +84,25 @@ class TestService:
         except Exception as e:
             logger.error(f"AI processing failed for test {test.test_id}: {e}")
     
-    async def schedule_test(self, test_id: int, schedule_data: Dict[str, Any], db: AsyncSession) -> Dict[str, Any]:
-        """Schedule a test for publishing"""
+    async def schedule_test(self, test_id: int, schedule_data: Any, db: AsyncSession) -> dict:
+        """Schedule a test for publishing, enforcing one-or-nothing principle."""
         try:
             test_repo = TestRepository(db)
-            
             # Get test and creator
             test = await test_repo.get_test_by_id(test_id)
             if not test:
                 raise HTTPException(status_code=404, detail="Test not found")
-            
             creator = await self._get_user_by_id(test.created_by, db)
-            
+            # Only allow scheduling if not already scheduled
+            if test.status == TestStatus.SCHEDULED.value:
+                raise HTTPException(status_code=400, detail="Test is already scheduled.")
             # Update test with schedule info
             await test_repo.update_test_schedule(test_id, schedule_data)
             await test_repo.update_test_status(test_id, TestStatus.SCHEDULED.value)
-            
             # Send notification
             updated_test = await test_repo.get_test_by_id(test_id)
             await self.notification_service.send_test_scheduled_notification(updated_test, creator)
-            
-            return {
-                "message": "Test scheduled successfully",
-                "test_id": test_id,
-                "scheduled_at": schedule_data.get("scheduled_at"),
-                "status": TestStatus.SCHEDULED.value
-            }
-            
+            return await self._format_test_response(updated_test, creator)
         except Exception as e:
             logger.error(f"Error scheduling test {test_id}: {e}")
             raise HTTPException(
