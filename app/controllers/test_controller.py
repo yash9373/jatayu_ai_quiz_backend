@@ -6,6 +6,7 @@ from app.services.auth.auth_service import get_current_user
 from app.schemas.test_schema import TestCreate, TestUpdate, TestResponse, TestSummary
 from app.db.database import get_db
 from app.models.user import User, UserRole
+from app.schemas.test_schema import TestSchedule
 
 router = APIRouter()
 test_service = TestService()
@@ -140,10 +141,11 @@ async def get_all_tests_for_recruiters(
 
 # Additional endpoints for test lifecycle management
 
+
 @router.post("/{test_id}/schedule")
 async def schedule_test(
     test_id: int,
-    schedule_data: dict,  # Will contain scheduled_at and deadlines
+    schedule_data: TestSchedule,  # Use schema for validation
     current_user: User = Depends(recruiter_required),
     db: AsyncSession = Depends(get_db)
 ):

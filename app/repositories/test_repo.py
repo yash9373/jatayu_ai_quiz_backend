@@ -16,6 +16,22 @@ import logging
 logger = logging.getLogger(__name__)
 
 class TestRepository:
+
+    async def get_live_tests(self) -> List[Test]:
+        """Get tests that are currently live and need to be ended if deadline passed"""
+        try:
+            from datetime import datetime
+            query = select(Test).where(
+                and_(
+                    Test.status == TestStatus.LIVE.value,
+                    Test.assessment_deadline != None
+                )
+            )
+            result = await self.db.execute(query)
+            return result.scalars().all()
+        except Exception as e:
+            logger.error(f"Error getting live tests: {str(e)}")
+            return []
     """Repository for Test entity following Repository Pattern"""
     
     def __init__(self, db: AsyncSession):

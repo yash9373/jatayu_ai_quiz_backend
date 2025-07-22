@@ -9,7 +9,19 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+
+
+import logging
+logging.basicConfig(level=logging.INFO)
+
 app = FastAPI()
+
+# Start scheduler only if this is the main process (not in every worker)
+
+import os
+import logging
+logger = logging.getLogger(__name__)
+
 
 # Configure CORS
 app.add_middleware(
@@ -20,8 +32,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+
 @app.on_event("startup")
 async def on_startup():
+    # Scheduler logic removed
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

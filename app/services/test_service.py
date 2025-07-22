@@ -1,3 +1,10 @@
+# --- Scheduler job functions ---
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from app.repositories.test_repo import TestRepository
+from app.models.test import TestStatus
+import asyncio
+from sqlalchemy.orm import sessionmaker
+import os
 from typing import List, Optional, Dict, Any
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,12 +17,47 @@ from app.models.test import Test, TestStatus
 from app.models.user import User
 import json
 import logging
+from datetime import datetime
+
+
+
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@localhost/recruitment")
+engine = create_async_engine(DATABASE_URL, future=True)
+AsyncSessionLocal = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+
+async def set_test_status_live(test_id):
+    """Job: Set test status to LIVE at scheduled time."""
+    from datetime import datetime, timezone
+    try:
+        print(f"[Scheduler] set_test_status_live called for test {test_id} at {datetime.now(timezone.utc)}")
+        logger.info(f"[Scheduler] set_test_status_live called for test {test_id} at {datetime.now(timezone.utc)}")
+        async with AsyncSessionLocal() as session:
+            repo = TestRepository(session)
+            await repo.update_test_status(test_id, TestStatus.LIVE.value, is_published=True)
+            print(f"[Scheduler] Test {test_id} moved to LIVE (scheduled job)")
+        logger.info(f"[Scheduler] Triggered set_test_status_live for test {test_id}")
+    except Exception as e:
+        logger.error(f"[Scheduler] Error in set_test_status_live for test {test_id}: {e}")
+
+async def set_test_status_ended(test_id):
+    """Job: Set test status to ENDED at assessment_deadline."""
+    try:
+        async with AsyncSessionLocal() as session:
+            repo = TestRepository(session)
+            await repo.update_test_status(test_id, TestStatus.ENDED.value)
+            print(f"[Scheduler] Test {test_id} moved to ENDED (scheduled job)")
+        logger.info(f"[Scheduler] Triggered set_test_status_ended for test {test_id}")
+    except Exception as e:
+        logger.error(f"[Scheduler] Error in set_test_status_ended for test {test_id}: {e}")
+
+
 
 logger = logging.getLogger(__name__)
 
 class TestService:
     async def schedule_test(self, test_id: int, schedule_data: TestSchedule, updated_by: int, db: AsyncSession) -> TestResponse:
-        """Schedule a test: set scheduled_at, change status to scheduled"""
+        """Schedule a test: set scheduled_at, assessment_deadline, and schedule status update jobs"""
         repo = TestRepository(db)
         test = await repo.get_test_by_id(test_id)
         if not test:
@@ -23,7 +65,7 @@ class TestService:
         # Only allow scheduling if test is in draft
         if test.status != TestStatus.DRAFT.value:
             raise HTTPException(status_code=400, detail="Test can only be scheduled from draft state")
-        # Update schedule fields
+        # Store the schedule dates and update status
         test.scheduled_at = schedule_data.scheduled_at
         test.application_deadline = schedule_data.application_deadline
         test.assessment_deadline = schedule_data.assessment_deadline
@@ -31,10 +73,31 @@ class TestService:
         test.updated_by = updated_by
         await db.commit()
         await db.refresh(test)
+
+        # Schedule status update jobs using Celery
+        from app.tasks import set_test_status_live, set_test_status_ended
+        from datetime import datetime
+        import pytz
+        def to_naive_utc(dt):
+            if dt is None:
+                return None
+            if dt.tzinfo is not None:
+                return dt.astimezone(pytz.UTC).replace(tzinfo=None)
+            return dt
+
+        naive_scheduled_at = to_naive_utc(test.scheduled_at)
+        naive_assessment_deadline = to_naive_utc(test.assessment_deadline)
+
+        if naive_scheduled_at:
+            set_test_status_live.apply_async(args=[test.test_id], eta=naive_scheduled_at)
+            logger.info(f"Scheduled set_test_status_live for test {test.test_id} at {naive_scheduled_at} (Celery)")
+        if naive_assessment_deadline:
+            set_test_status_ended.apply_async(args=[test.test_id], eta=naive_assessment_deadline)
+            logger.info(f"Scheduled set_test_status_ended for test {test.test_id} at {naive_assessment_deadline} (Celery)")
+
         creator = await self._get_user_by_id(test.created_by, db)
         return await self._format_test_response(test, creator)
     """Test Service with AI integration and notifications"""
-    
     def __init__(self):
         self.ai_service = get_ai_service()
         self.notification_service = get_notification_service()
@@ -96,8 +159,10 @@ class TestService:
             # Only allow scheduling if not already scheduled
             if test.status == TestStatus.SCHEDULED.value:
                 raise HTTPException(status_code=400, detail="Test is already scheduled.")
+            # Convert schedule_data to dict for repository
+            schedule_dict = schedule_data.dict(exclude_unset=True) if hasattr(schedule_data, 'dict') else schedule_data
             # Update test with schedule info
-            await test_repo.update_test_schedule(test_id, schedule_data)
+            await test_repo.update_test_schedule(test_id, schedule_dict)
             await test_repo.update_test_status(test_id, TestStatus.SCHEDULED.value)
             # Send notification
             updated_test = await test_repo.get_test_by_id(test_id)
