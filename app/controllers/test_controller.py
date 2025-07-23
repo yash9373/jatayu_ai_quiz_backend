@@ -1,3 +1,12 @@
+from pydantic import BaseModel
+
+class SkillGraphUpdate(BaseModel):
+    total_questions: int
+    high: int
+    medium: int
+    low: int
+from fastapi import Body
+import json
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
@@ -7,6 +16,7 @@ from app.schemas.test_schema import TestCreate, TestUpdate, TestResponse, TestSu
 from app.db.database import get_db
 from app.models.user import User, UserRole
 from app.schemas.test_schema import TestSchedule
+from app.repositories.test_repo import TestRepository
 
 router = APIRouter()
 test_service = TestService()
@@ -23,6 +33,39 @@ def recruiter_required(current_user: User = Depends(get_current_user)):
 
 
 from app.schemas.test_schema import TestSchedule
+
+
+@router.put("/{test_id}/update-skill-graph")
+async def update_skill_graph(
+    test_id: int,
+    data: SkillGraphUpdate,
+    current_user: User = Depends(recruiter_required),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update total_questions and question_distribution for a test (MVC, repository pattern)"""
+    # Extract values from validated Pydantic model
+    total_questions = data.total_questions
+    question_distribution = json.dumps({
+        "high": data.high,
+        "medium": data.medium,
+        "low": data.low
+    })
+    # Use repository to update test
+    repo = TestRepository(db)
+    test = await repo.get_test_by_id(test_id)
+    if not test:
+        raise HTTPException(status_code=404, detail="Test not found")
+    if test.created_by != current_user.user_id:
+        raise HTTPException(status_code=403, detail="You can only update your own tests")
+    await repo.update_skill_graph(test_id, total_questions, question_distribution)
+    return {
+        "test_id": test_id,
+        "total_questions": total_questions,
+        "question_distribution": question_distribution,
+        "message": "Skill graph updated successfully."
+    }
+
+
 @router.post("/{test_id}/schedule", response_model=TestResponse)
 async def schedule_test(
     test_id: int,

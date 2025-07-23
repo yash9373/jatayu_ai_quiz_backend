@@ -3,6 +3,7 @@ Test Repository - Data Access Layer
 Handles all database operations for tests
 """
 import json
+from sqlalchemy import update
 from typing import List, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -36,7 +37,17 @@ class TestRepository:
     
     def __init__(self, db: AsyncSession):
         self.db = db
-    
+    async def update_skill_graph(self, test_id: int, total_questions: int, question_distribution: str):
+        query = (
+            update(Test)
+            .where(Test.test_id == test_id)
+            .values(
+                total_questions=total_questions,
+                question_distribution=question_distribution
+            )
+        )
+        await self.db.execute(query)
+        await self.db.commit()
     async def create_test(self, test_data: TestCreate, created_by: int) -> Test:
         """Create a new test"""
         try:
