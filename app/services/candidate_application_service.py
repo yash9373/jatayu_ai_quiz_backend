@@ -231,6 +231,8 @@ class CandidateApplicationService:
         response_list = []
         for app in applications:
             app_dict = {
+                "application_id": app.application_id,
+                "user_id": app.user_id,
                 "candidate_name": app.user.name if app.user else "Unknown",
                 "candidate_email": app.user.email if app.user else "Unknown",
                 "resume_link": app.resume_link,

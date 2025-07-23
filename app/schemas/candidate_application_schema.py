@@ -65,6 +65,8 @@ class CandidateApplicationUpdate(BaseModel):
 
 class CandidateApplicationSummaryResponse(BaseModel):
     """Minimal response with only essential candidate information"""
+    application_id: int
+    user_id: int
     candidate_name: str
     candidate_email: str
     resume_link: str

@@ -81,6 +81,9 @@ class TestResponse(BaseModel):
     creator_name: Optional[str] = None
     creator_role: Optional[str] = None
     
+    total_candidates: Optional[int] = None
+    duration: Optional[int] = None  # in minutes
+
     class Config:
         from_attributes = True
 

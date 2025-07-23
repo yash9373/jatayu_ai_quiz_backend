@@ -487,9 +487,9 @@ class TestService:
         return user
     
     async def _format_test_response(self, test: Test, creator: User = None) -> TestResponse:
-        """Format test response with creator info"""
-        # Parse JSON fields robustly
+        """Format test response with creator info, total candidates, and duration"""
         import json
+        from app.repositories.candidate_count_helper import count_candidates_by_test_id
         parsed_jd = None
         skill_graph = None
         try:
@@ -504,6 +504,15 @@ class TestService:
                     skill_graph = None
         except Exception:
             skill_graph = None
+
+        # Get total candidates
+        total_candidates = await count_candidates_by_test_id(self.db, test.test_id) if hasattr(self, 'db') and self.db else 0
+        # If self.db is not set, fallback to 0 (should be set in service methods)
+
+        # Calculate duration (in minutes) if scheduled_at and assessment_deadline are present
+        duration = None
+        if test.scheduled_at and test.assessment_deadline:
+            duration = int((test.assessment_deadline - test.scheduled_at).total_seconds() // 60)
 
         return TestResponse(
             test_id=test.test_id,
@@ -527,7 +536,9 @@ class TestService:
             created_at=test.created_at,
             updated_at=test.updated_at,
             creator_name=creator.name if creator else None,
-            creator_role=creator.role.value if creator else None
+            creator_role=creator.role.value if creator else None,
+            total_candidates=total_candidates,
+            duration=duration
         )
 
 # Service instance
