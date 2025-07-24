@@ -2,7 +2,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_openai import ChatOpenAI
 from app.services.mcq_generation.state import AgentState, GraphNodeState, Question, Response, UserResponse, SubmitResponsePayload, GenerateQuestionPayload, ExitPayload
-from skill_graph_state import SkillGraph, SkillNode
+from app.services.skill_graph_generation.state import SkillGraph, SkillNode
 from typing import List, Dict, Tuple, Optional
 from langgraph.graph import StateGraph, END, START
 from langgraph.types import interrupt, Command
