@@ -1,3 +1,10 @@
+# --- Scheduler job functions ---
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from app.repositories.test_repo import TestRepository
+from app.models.test import TestStatus
+import asyncio
+from sqlalchemy.orm import sessionmaker
+import os
 from typing import List, Optional, Dict, Any
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,11 +17,87 @@ from app.models.test import Test, TestStatus
 from app.models.user import User
 import json
 import logging
+from datetime import datetime
+
+
+
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@localhost/recruitment")
+engine = create_async_engine(DATABASE_URL, future=True)
+AsyncSessionLocal = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+
+async def set_test_status_live(test_id):
+    """Job: Set test status to LIVE at scheduled time."""
+    from datetime import datetime, timezone
+    try:
+        print(f"[Scheduler] set_test_status_live called for test {test_id} at {datetime.now(timezone.utc)}")
+        logger.info(f"[Scheduler] set_test_status_live called for test {test_id} at {datetime.now(timezone.utc)}")
+        async with AsyncSessionLocal() as session:
+            repo = TestRepository(session)
+            await repo.update_test_status(test_id, TestStatus.LIVE.value, is_published=True)
+            print(f"[Scheduler] Test {test_id} moved to LIVE (scheduled job)")
+        logger.info(f"[Scheduler] Triggered set_test_status_live for test {test_id}")
+    except Exception as e:
+        logger.error(f"[Scheduler] Error in set_test_status_live for test {test_id}: {e}")
+
+async def set_test_status_ended(test_id):
+    """Job: Set test status to ENDED at assessment_deadline."""
+    try:
+        async with AsyncSessionLocal() as session:
+            repo = TestRepository(session)
+            await repo.update_test_status(test_id, TestStatus.ENDED.value)
+            print(f"[Scheduler] Test {test_id} moved to ENDED (scheduled job)")
+        logger.info(f"[Scheduler] Triggered set_test_status_ended for test {test_id}")
+    except Exception as e:
+        logger.error(f"[Scheduler] Error in set_test_status_ended for test {test_id}: {e}")
+
+
 
 logger = logging.getLogger(__name__)
 
 
 class TestService:
+    async def schedule_test(self, test_id: int, schedule_data: TestSchedule, updated_by: int, db: AsyncSession) -> TestResponse:
+        """Schedule a test: set scheduled_at, assessment_deadline, and schedule status update jobs"""
+        repo = TestRepository(db)
+        test = await repo.get_test_by_id(test_id)
+        if not test:
+            raise HTTPException(status_code=404, detail="Test not found")
+        # Only allow scheduling if test is in draft
+        if test.status != TestStatus.DRAFT.value:
+            raise HTTPException(status_code=400, detail="Test can only be scheduled from draft state")
+        # Store the schedule dates and update status
+        test.scheduled_at = schedule_data.scheduled_at
+        test.application_deadline = schedule_data.application_deadline
+        test.assessment_deadline = schedule_data.assessment_deadline
+        test.status = TestStatus.SCHEDULED.value
+        test.updated_by = updated_by
+        await db.commit()
+        await db.refresh(test)
+
+        # Schedule status update jobs using Celery
+        from app.tasks import set_test_status_live, set_test_status_ended
+        from datetime import datetime
+        import pytz
+        def to_naive_utc(dt):
+            if dt is None:
+                return None
+            if dt.tzinfo is not None:
+                return dt.astimezone(pytz.UTC).replace(tzinfo=None)
+            return dt
+
+        naive_scheduled_at = to_naive_utc(test.scheduled_at)
+        naive_assessment_deadline = to_naive_utc(test.assessment_deadline)
+
+        if naive_scheduled_at:
+            set_test_status_live.apply_async(args=[test.test_id], eta=naive_scheduled_at)
+            logger.info(f"Scheduled set_test_status_live for test {test.test_id} at {naive_scheduled_at} (Celery)")
+        if naive_assessment_deadline:
+            set_test_status_ended.apply_async(args=[test.test_id], eta=naive_assessment_deadline)
+            logger.info(f"Scheduled set_test_status_ended for test {test.test_id} at {naive_assessment_deadline} (Celery)")
+
+        creator = await self._get_user_by_id(test.created_by, db)
+        return await self._format_test_response(test, creator)
     """Test Service with AI integration and notifications"""
 
     def __init__(self):
@@ -65,33 +148,31 @@ class TestService:
 
         except Exception as e:
             logger.error(f"AI processing failed for test {test.test_id}: {e}")
-
-    async def schedule_test(self, test_id: int, schedule_data: Dict[str, Any], db: AsyncSession) -> Dict[str, Any]:
-        """Schedule a test for publishing"""
+    
+    async def schedule_test(self, test_id: int, schedule_data: Any, db: AsyncSession) -> dict:
+        """Schedule a test for publishing, enforcing one-or-nothing principle."""
         try:
             test_repo = TestRepository(db)
-
             # Get test and creator
             test = await test_repo.get_test_by_id(test_id)
             if not test:
                 raise HTTPException(status_code=404, detail="Test not found")
 
             creator = await self._get_user_by_id(test.created_by, db)
+            # Only allow scheduling if not already scheduled
+            if test.status == TestStatus.SCHEDULED.value:
+                raise HTTPException(status_code=400, detail="Test is already scheduled.")
+            # Convert schedule_data to dict for repository
+            schedule_dict = schedule_data.dict(exclude_unset=True) if hasattr(schedule_data, 'dict') else schedule_data
 
             # Update test with schedule info
-            await test_repo.update_test_schedule(test_id, schedule_data)
+            await test_repo.update_test_schedule(test_id, schedule_dict)
             await test_repo.update_test_status(test_id, TestStatus.SCHEDULED.value)
 
             # Send notification
             updated_test = await test_repo.get_test_by_id(test_id)
             await self.notification_service.send_test_scheduled_notification(updated_test, creator)
-
-            return {
-                "message": "Test scheduled successfully",
-                "test_id": test_id,
-                "scheduled_at": schedule_data.get("scheduled_at"),
-                "status": TestStatus.SCHEDULED.value
-            }
+            return await self._format_test_response(updated_test, creator)
 
         except Exception as e:
             logger.error(f"Error scheduling test {test_id}: {e}")
@@ -329,18 +410,33 @@ class TestService:
                     detail="Test not found"
                 )
 
+            
+            # Get the current test before update
+            current_test = await repo.get_test_by_id(test_id)
+
+            # Check if job_description is being updated and actually changed
+            job_desc_updated = False
+            if "job_description" in test_data.dict(exclude_unset=True):
+                if test_data.job_description is not None and test_data.job_description != current_test.job_description:
+                    job_desc_updated = True
+
+
             # Update the test
             updated_test = await repo.update_test(test_id, test_data, updated_by)
+
+            # If job_description changed, re-run AI pipeline
+            if job_desc_updated and updated_test.job_description:
+                parsed_jd = await self.ai_service.parse_job_description(updated_test.job_description)
+                skill_graph = await self.ai_service.generate_skill_graph(parsed_jd)
+                await repo.update_test_ai_data(updated_test.test_id, parsed_jd, skill_graph)
+                # Refresh updated_test with new AI fields
+                updated_test = await repo.get_test_by_id(test_id)
 
             # Get creator info
             creator = await self._get_user_by_id(updated_test.created_by, db)
 
-            # Send notification
-            await self.notification_service.notify_test_updated(
-                test_name=updated_test.test_name,
-                test_id=test_id,
-                recruiter_email=creator.email
-            )
+            # Send notification (use send_test_created_notification as fallback, or skip if not needed)
+            # await self.notification_service.send_test_created_notification(updated_test, creator)
 
             return await self._format_test_response(updated_test, creator)
 
@@ -399,12 +495,33 @@ class TestService:
         return user
 
     async def _format_test_response(self, test: Test, creator: User = None) -> TestResponse:
-        """Format test response with creator info"""
-        # Parse JSON fields
-        parsed_jd = json.loads(
-            test.parsed_job_description) if test.parsed_job_description else None
-        skill_graph = json.loads(
-            test.skill_graph) if test.skill_graph else None
+
+        """Format test response with creator info, total candidates, and duration"""
+        import json
+        from app.repositories.candidate_count_helper import count_candidates_by_test_id
+        parsed_jd = None
+        skill_graph = None
+        try:
+            if test.parsed_job_description:
+                parsed_jd = json.loads(test.parsed_job_description)
+        except Exception:
+            parsed_jd = None
+        try:
+            if test.skill_graph:
+                skill_graph = json.loads(test.skill_graph)
+                if not isinstance(skill_graph, dict):
+                    skill_graph = None
+        except Exception:
+            skill_graph = None
+
+        # Get total candidates
+        total_candidates = await count_candidates_by_test_id(self.db, test.test_id) if hasattr(self, 'db') and self.db else 0
+        # If self.db is not set, fallback to 0 (should be set in service methods)
+
+        # Calculate duration (in minutes) if scheduled_at and assessment_deadline are present
+        duration = None
+        if test.scheduled_at and test.assessment_deadline:
+            duration = int((test.assessment_deadline - test.scheduled_at).total_seconds() // 60)
 
         return TestResponse(
             test_id=test.test_id,
@@ -428,7 +545,9 @@ class TestService:
             created_at=test.created_at,
             updated_at=test.updated_at,
             creator_name=creator.name if creator else None,
-            creator_role=creator.role.value if creator else None
+            creator_role=creator.role.value if creator else None,
+            total_candidates=total_candidates,
+            duration=duration
         )
 
 

@@ -6,6 +6,7 @@ from app.services.auth.auth_service import get_current_user
 from app.schemas.test_schema import TestCreate, TestUpdate, TestResponse, TestSummary
 from app.db.database import get_db
 from app.models.user import User, UserRole
+from app.schemas.test_schema import TestSchedule
 
 router = APIRouter()
 test_service = TestService()
@@ -19,6 +20,23 @@ def recruiter_required(current_user: User = Depends(get_current_user)):
             detail="Recruiter access required"
         )
     return current_user
+
+
+from app.schemas.test_schema import TestSchedule
+@router.post("/{test_id}/schedule", response_model=TestResponse)
+async def schedule_test(
+    test_id: int,
+    schedule_data: TestSchedule,
+    current_user: User = Depends(recruiter_required),
+    db: AsyncSession = Depends(get_db)
+):
+    """Schedule a test (set scheduled_at, change status to scheduled)"""
+    return await test_service.schedule_test(
+        test_id=test_id,
+        schedule_data=schedule_data,
+        db=db
+    )
+
 
 @router.post("/", response_model=TestResponse)
 async def create_test(
@@ -75,15 +93,15 @@ async def update_test(
     current_user: User = Depends(recruiter_required),
     db: AsyncSession = Depends(get_db)
 ):
-    """Update a test (owner only)"""
-    # Check ownership first
+    """Update a test (owner only, only in preparing)"""
     existing_test = await test_service.get_test_by_id(test_id=test_id, db=db)
     if existing_test.created_by != current_user.user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only update your own tests"
         )
-    
+    if existing_test.status != "preparing":
+        raise HTTPException(status_code=403, detail="Test/job description can only be updated in 'preparing' status.")
     return await test_service.update_test(
         test_id=test_id,
         test_data=test_data,
@@ -123,10 +141,11 @@ async def get_all_tests_for_recruiters(
 
 # Additional endpoints for test lifecycle management
 
+
 @router.post("/{test_id}/schedule")
 async def schedule_test(
     test_id: int,
-    schedule_data: dict,  # Will contain scheduled_at and deadlines
+    schedule_data: TestSchedule,  # Use schema for validation
     current_user: User = Depends(recruiter_required),
     db: AsyncSession = Depends(get_db)
 ):
@@ -138,7 +157,11 @@ async def schedule_test(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only schedule your own tests"
         )
-    
+    if existing_test.status == "live":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot reschedule a test that is already live."
+        )
     return await enhanced_test_service.schedule_test(
         test_id=test_id,
         schedule_data=schedule_data,

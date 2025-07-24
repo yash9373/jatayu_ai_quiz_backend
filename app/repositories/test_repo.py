@@ -17,6 +17,22 @@ logger = logging.getLogger(__name__)
 
 
 class TestRepository:
+
+    async def get_live_tests(self) -> List[Test]:
+        """Get tests that are currently live and need to be ended if deadline passed"""
+        try:
+            from datetime import datetime
+            query = select(Test).where(
+                and_(
+                    Test.status == TestStatus.LIVE.value,
+                    Test.assessment_deadline != None
+                )
+            )
+            result = await self.db.execute(query)
+            return result.scalars().all()
+        except Exception as e:
+            logger.error(f"Error getting live tests: {str(e)}")
+            return []
     """Repository for Test entity following Repository Pattern"""
 
     def __init__(self, db: AsyncSession):
@@ -34,9 +50,10 @@ class TestRepository:
                 total_questions=test_data.total_questions,
                 time_limit_minutes=test_data.time_limit_minutes,
                 total_marks=test_data.total_marks,
-                scheduled_at=test_data.scheduled_at,
-                application_deadline=test_data.application_deadline,
-                assessment_deadline=test_data.assessment_deadline,
+                question_distribution=test_data.question_distribution if test_data.question_distribution else None,
+                scheduled_at=None,
+                application_deadline=None,
+                assessment_deadline=None,
                 created_by=created_by,
                 status=TestStatus.DRAFT.value
             )
@@ -102,7 +119,11 @@ class TestRepository:
             # Update fields
             update_data = test_data.dict(exclude_unset=True)
             for field, value in update_data.items():
-                setattr(test, field, value)
+                if field == "question_distribution" and value is not None:
+                    import json
+                    test.question_distribution = json.dumps(value)
+                else:
+                    setattr(test, field, value)
 
             test.updated_by = updated_by
 

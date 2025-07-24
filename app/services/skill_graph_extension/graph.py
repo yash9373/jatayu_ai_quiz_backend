@@ -16,7 +16,7 @@ from typing import Literal
 def get_llm():
     """Get LLM instance lazily to avoid initialization issues during import."""
     return ChatOpenAI(
-        model="gpt-4o-mini",
+        model="gpt-4o",
         temperature=0.1,
     )
 
@@ -72,37 +72,86 @@ class ExtensionResult(BaseModel):
 
 # Skill graph extension prompt
 SKILL_GRAPH_EXTENSION_SYSTEM_PROMPT = """
-You are an AI assistant extending a skill graph based on a candidate's resume.
 
-Your task is to:
-1. Analyze the candidate's resume for HIGH-LEVEL TECHNICAL SKILLS that are NOT already present in the existing skill graph
-2. Identify which new skills would be valuable additions based on the job description context
-3. Map each new skill to the most appropriate parent skill from the existing graph
-4. Return only new L-priority nodes that should be added
+You are an intelligent assistant responsible for extending an existing skill graph (DAG) using information extracted from a candidate’s resume. This extended DAG will capture additional resume-specific skills as optional, low-priority nodes.
 
-FOCUS ONLY ON:
-- Programming languages (Python, JavaScript, Java, C++, etc.)
-- Frameworks (React, Django, FastAPI, Angular, etc.)
-- Libraries (NumPy, Pandas, TensorFlow, etc.)
-- Tools and platforms (Docker, Kubernetes, AWS, Git, etc.)
-- Databases (PostgreSQL, MongoDB, Redis, etc.)
-- Technologies (REST APIs, GraphQL, microservices, etc.)
+Your goal is to analyze the resume and identify concrete, technical skills that are relevant to the job role but are currently missing from the existing DAG (which was originally derived from the job description).
 
-EXCLUDE:
-- Soft skills (communication, leadership, etc.)
-- General concepts (problem-solving, analytical thinking, etc.)
-- Domain knowledge without specific technical implementation
-- Certifications or methodologies unless they're specific technical tools
+---
+OBJECTIVE:
+---
 
-Guidelines:
-- Only identify technical skills that are completely missing from the current graph
-- Do not duplicate any skills already present at any level
-- Be highly selective - only include concrete technical skills with clear implementation value
-- Attach new skills to the most logical parent in the existing hierarchy
-- All new nodes should have priority "L" (Low) since they're resume-specific additions
-- Maximum 5-8 technical skills to avoid clutter
+- Enrich the skill graph with new technical skills found in the candidate's resume.
+- Only add skills that:
+    - Are clearly technical
+    - Have implementation value
+    - Are not already present in the existing DAG
+- Attach these new skills under the most appropriate parent node in the DAG.
+- All new nodes must be labeled with priority "L" (Low) since they are optional, resume-specific additions.
 
-Return format: List of extension nodes with skill name, priority "L", and parent skill name.
+---
+EXTENSION RULES:
+---
+
+1. New Skill Identification:
+   - Extract only high-confidence, high-level technical skills from the candidate’s resume.
+   - Focus on skills that are missing entirely from the current DAG (do not duplicate any skill at any level).
+   - Use the job description context to validate whether the skill is relevant or complementary.
+
+2. Skill Categories to Include:
+   You should only consider concrete, technical skills such as:
+   - Programming languages (e.g., Python, Java, C++)
+   - Frameworks (e.g., Django, React, FastAPI)
+   - Libraries (e.g., NumPy, Pandas, TensorFlow)
+   - Tools and platforms (e.g., Docker, Kubernetes, Git, AWS, Azure)
+   - Databases (e.g., PostgreSQL, MongoDB, Redis)
+   - Architectural concepts (e.g., REST APIs, Microservices, GraphQL)
+
+3. What to Exclude:
+   Strictly exclude the following:
+   - Soft skills (e.g., communication, leadership)
+   - Abstract or generic traits (e.g., problem-solving)
+   - Non-technical domain knowledge (e.g., finance, healthcare without tech context)
+   - Certifications or methodologies unless tied to a technical implementation (e.g., "AWS Certified" is not the same as "AWS EC2")
+
+4. Parent Mapping Logic:
+   - For each new skill, identify the most relevant existing node in the current graph and attach it as a subskill.
+   - If no clear parent exists, select the closest conceptual anchor available.
+   - The original graph structure must remain unchanged except for the addition of new L-priority subskills.
+
+5. Node Priority:
+   - All new nodes must have "priority": "L" (Low).
+   - Do not alter or relabel any existing H or M nodes.
+
+6. Selectivity and Volume:
+   - Be highly selective. Prioritize only the most meaningful technical additions.
+   - Return a maximum of 5 to 8 well-mapped new skills to maintain graph clarity.
+
+---
+OUTPUT FORMAT:
+---
+Return only a list of extension nodes in the following format:
+
+[
+  {{
+    "skill": "string",             // Name of the new skill
+    "priority": "L",
+    "parent_skill": "string"       // Exact name of the existing parent skill in the DAG
+  }},
+  ...
+]
+
+---
+IMPORTANT:
+--- 
+- Do not return the entire updated graph — only the list of new L-priority nodes and their parent mappings.
+- Do not include any explanation, commentary, or markdown formatting.
+- Avoid randomness. Results should remain consistent across similar resume inputs.
+
+You will be provided with:
+- The original skill graph (with H and M nodes)
+- The candidate’s parsed resume
+- The job description text for context
 """
 
 
@@ -143,29 +192,54 @@ def identify_extension_nodes(state: State) -> State:
 
         # Create the extension prompt
         extension_prompt = f"""
-You are an AI assistant extending a skill graph based on the candidate's resume.
 
-You are given:
-1. A job description (JD)
-2. A parsed resume
-3. The original skill graph that includes only High (H) and Moderate (M) priority nodes.
+You are assisting in the extension of a skill graph (DAG) used for AI-powered technical assessments.
 
-Your task is to:
-- Identify HIGH-LEVEL TECHNICAL SKILLS in the resume that are NOT already in the skill graph.
-- Focus ONLY on: programming languages, frameworks, libraries, tools, databases, and specific technologies
-- Map them to appropriate parent skills from the existing graph.
-- Attach them as L-priority nodes under the most relevant parent.
-- Do not duplicate skills already present.
-- Do not return any H or M nodes — only new L-nodes.
-- Be highly selective and only include concrete technical skills.
-- Maximum 5-8 skills to avoid clutter.
+You have been provided with the following:
+1. A Job Description (JD) that outlines the required technical competencies.
+2. A candidate’s parsed resume containing their self-declared technical experience.
+3. An existing skill graph containing only High (H) and Medium (M) priority nodes.
 
-JD:
+Your objective is to:
+- Analyze the resume and extract *high-level technical skills* that are *not already present* anywhere in the current skill graph.
+- Validate the relevance of these skills using the context of the job description.
+- Map each new skill to the *most appropriate parent node* in the existing skill graph.
+- Return only the *new L-priority nodes* (Low priority), which represent resume-specific but job-relevant technical skills.
+
+---
+INSTRUCTIONS:
+---
+- Only include *concrete technical skills* that fall into the following categories:
+    - Programming Languages (e.g., Python, Java, Go)
+    - Frameworks (e.g., React, Django, FastAPI)
+    - Libraries (e.g., NumPy, Pandas, TensorFlow)
+    - Tools & Platforms (e.g., Git, Docker, Kubernetes, AWS)
+    - Databases (e.g., PostgreSQL, MongoDB, Redis)
+    - Technologies (e.g., REST APIs, GraphQL, Microservices)
+
+- Do NOT include:
+    - Soft skills (e.g., communication, leadership)
+    - Abstract or behavioral traits (e.g., problem-solving)
+    - General domain knowledge without technical specificity
+    - Certifications or methodologies unless they imply specific technical tools
+
+- Each new node must:
+    - Be labeled with priority "L"
+    - Be attached under the most logically relevant *existing H or M node*
+    - Not already exist anywhere in the current graph (root or subskills)
+
+- Be selective and return *no more than 5–8* highly relevant technical additions.
+
+---
+CONTEXT:
+---
+
+Job Description:
 \"\"\"
 {jd_text}
 \"\"\"
 
-Resume:
+Candidate Resume:
 \"\"\"
 {resume_text}
 \"\"\"
@@ -175,7 +249,21 @@ Existing Skill Graph (H and M only):
 {json.dumps(skill_graph.model_dump() if hasattr(skill_graph, 'model_dump') else skill_graph, indent=2)}
 \"\"\"
 
-Identify new HIGH-LEVEL TECHNICAL SKILLS from the resume that would be valuable additions to this skill graph.
+---
+REQUIRED OUTPUT:
+---
+Return only a list of new nodes in the following format:
+
+[
+  {{
+    "skill": "string",
+    "priority": "L",
+    "parent_skill": "string"
+  }},
+  ...
+]
+
+Do not return the full graph. Do not include H or M nodes. Do not include any commentary or explanation. Only return a valid list of extension nodes.
 """
 
         llm = get_llm()

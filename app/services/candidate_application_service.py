@@ -49,6 +49,10 @@ class CandidateApplicationService:
         test = await get_test_by_id(db, data.test_id)
         if not test:
             return {"error": "Test not found."}
+        # If test is in draft, move to preparing when first candidate applies
+        if test.status == "draft":
+            from app.repositories.test_repo import TestRepository
+            await TestRepository(db).update_test_status(test.test_id, "preparing")
         # AI screening
         ai_result = self.ai_service.screen_resume_text(
             resume_text=resume_text,
@@ -227,6 +231,8 @@ class CandidateApplicationService:
         response_list = []
         for app in applications:
             app_dict = {
+                "application_id": app.application_id,
+                "user_id": app.user_id,
                 "candidate_name": app.user.name if app.user else "Unknown",
                 "candidate_email": app.user.email if app.user else "Unknown",
                 "resume_link": app.resume_link,
