@@ -55,6 +55,7 @@ async def set_test_status_ended(test_id):
 
 logger = logging.getLogger(__name__)
 
+
 class TestService:
     async def schedule_test(self, test_id: int, schedule_data: TestSchedule, updated_by: int, db: AsyncSession) -> TestResponse:
         """Schedule a test: set scheduled_at, assessment_deadline, and schedule status update jobs"""
@@ -98,52 +99,53 @@ class TestService:
         creator = await self._get_user_by_id(test.created_by, db)
         return await self._format_test_response(test, creator)
     """Test Service with AI integration and notifications"""
+
     def __init__(self):
         self.ai_service = get_ai_service()
         self.notification_service = get_notification_service()
-    
+
     async def create_test_with_ai(self, test_data: TestCreate, created_by: int, db: AsyncSession) -> TestResponse:
         """Create a new test with AI processing"""
         try:
             # 1. Create the test first
             repo = TestRepository(db)
             test = await repo.create_test(test_data, created_by)
-            
+
             # 2. Get creator info for notifications
             creator = await self._get_user_by_id(created_by, db)
-            
+
             # 3. Process job description with AI if provided
             if test_data.job_description:
                 await self._process_job_description_with_ai(test, creator, db)
                 # Fetch updated test data after AI processing
                 test = await repo.get_test_by_id(test.test_id)
-            
+
             # 4. Return test response
             return await self._format_test_response(test, creator)
-            
+
         except Exception as e:
             logger.error(f"Error creating test with AI: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to create test: {str(e)}"
             )
-    
+
     async def _process_job_description_with_ai(self, test: Test, creator: User, db: AsyncSession) -> None:
         """Process job description with AI in background"""
         try:
             repo = TestRepository(db)
-            
+
             # 1. Parse job description
             parsed_jd = await self.ai_service.parse_job_description(test.job_description)
-            
+
             # 2. Generate skill graph
             skill_graph = await self.ai_service.generate_skill_graph(parsed_jd)
-            
+
             # 3. Update test with AI results
             await repo.update_test_ai_data(test.test_id, parsed_jd, skill_graph)
-            
+
             logger.info(f"AI processing completed for test {test.test_id}")
-            
+
         except Exception as e:
             logger.error(f"AI processing failed for test {test.test_id}: {e}")
     
@@ -155,104 +157,108 @@ class TestService:
             test = await test_repo.get_test_by_id(test_id)
             if not test:
                 raise HTTPException(status_code=404, detail="Test not found")
+
             creator = await self._get_user_by_id(test.created_by, db)
             # Only allow scheduling if not already scheduled
             if test.status == TestStatus.SCHEDULED.value:
                 raise HTTPException(status_code=400, detail="Test is already scheduled.")
             # Convert schedule_data to dict for repository
             schedule_dict = schedule_data.dict(exclude_unset=True) if hasattr(schedule_data, 'dict') else schedule_data
+
             # Update test with schedule info
             await test_repo.update_test_schedule(test_id, schedule_dict)
             await test_repo.update_test_status(test_id, TestStatus.SCHEDULED.value)
+
             # Send notification
             updated_test = await test_repo.get_test_by_id(test_id)
             await self.notification_service.send_test_scheduled_notification(updated_test, creator)
             return await self._format_test_response(updated_test, creator)
+
         except Exception as e:
             logger.error(f"Error scheduling test {test_id}: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to schedule test: {str(e)}"
             )
-    
+
     async def publish_test(self, test_id: int, db: AsyncSession) -> Dict[str, Any]:
         """Manually publish a test"""
         try:
             test_repo = TestRepository(db)
-            
+
             # Get test and creator
             test = await test_repo.get_test_by_id(test_id)
             if not test:
                 raise HTTPException(status_code=404, detail="Test not found")
-            
+
             creator = await self._get_user_by_id(test.created_by, db)
-            
+
             # Update test status
             await test_repo.update_test_status(test_id, TestStatus.PUBLISHED.value)
             await test_repo.update_is_published(test_id, True)
-            
+
             # Send notification
             updated_test = await test_repo.get_test_by_id(test_id)
             await self.notification_service.send_test_published_notification(updated_test, creator)
-            
+
             return {
                 "message": "Test published successfully",
                 "test_id": test_id,
                 "status": TestStatus.PUBLISHED.value,
                 "is_published": True
             }
-            
+
         except Exception as e:
             logger.error(f"Error publishing test {test_id}: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to publish test: {str(e)}"
             )
-    
+
     async def unpublish_test(self, test_id: int, db: AsyncSession) -> Dict[str, Any]:
         """Unpublish/pause a test"""
         try:
             test_repo = TestRepository(db)
-            
+
             # Get test and creator
             test = await test_repo.get_test_by_id(test_id)
             if not test:
                 raise HTTPException(status_code=404, detail="Test not found")
-            
+
             creator = await self._get_user_by_id(test.created_by, db)
-            
+
             # Update test status
             await test_repo.update_test_status(test_id, TestStatus.PAUSED.value)
             await test_repo.update_is_published(test_id, False)
-            
+
             # Send notification
             updated_test = await test_repo.get_test_by_id(test_id)
             await self.notification_service.send_test_unpublished_notification(updated_test, creator)
-            
+
             return {
                 "message": "Test unpublished successfully",
                 "test_id": test_id,
                 "status": TestStatus.PAUSED.value,
                 "is_published": False
             }
-            
+
         except Exception as e:
             logger.error(f"Error unpublishing test {test_id}: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to unpublish test: {str(e)}"
             )
-    
+
     async def duplicate_test(self, test_id: int, created_by: int, db: AsyncSession) -> TestResponse:
         """Create a duplicate of an existing test"""
         try:
             test_repo = TestRepository(db)
-            
+
             # Get original test
             original_test = await test_repo.get_test_by_id(test_id)
             if not original_test:
                 raise HTTPException(status_code=404, detail="Test not found")
-            
+
             # Create duplicate test data
             duplicate_data = TestCreate(
                 test_name=f"{original_test.test_name} (Copy)",
@@ -267,37 +273,37 @@ class TestService:
                 application_deadline=None,
                 assessment_deadline=None
             )
-            
+
             # Create the duplicate
             duplicate_test = await test_repo.create_test(duplicate_data, created_by)
-            
+
             # Copy AI-generated content if available
             if original_test.parsed_job_description:
                 await test_repo.update_parsed_jd(duplicate_test.test_id, json.loads(original_test.parsed_job_description))
-            
+
             if original_test.skill_graph:
                 await test_repo.update_skill_graph(duplicate_test.test_id, json.loads(original_test.skill_graph))
-            
+
             # Get creator and return response
             creator = await self._get_user_by_id(created_by, db)
             return await self._format_test_response(duplicate_test, creator)
-            
+
         except Exception as e:
             logger.error(f"Error duplicating test {test_id}: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to duplicate test: {str(e)}"
             )
-    
+
     async def get_test_status(self, test_id: int, db: AsyncSession) -> Dict[str, Any]:
         """Get test status information"""
         try:
             test_repo = TestRepository(db)
             test = await test_repo.get_test_by_id(test_id)
-            
+
             if not test:
                 raise HTTPException(status_code=404, detail="Test not found")
-            
+
             return {
                 "test_id": test.test_id,
                 "test_name": test.test_name,
@@ -311,77 +317,77 @@ class TestService:
                 "has_parsed_jd": test.parsed_job_description is not None,
                 "has_skill_graph": test.skill_graph is not None
             }
-            
+
         except Exception as e:
             logger.error(f"Error getting test status {test_id}: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to get test status: {str(e)}"
             )
-    
+
     async def get_all_tests(self, db: AsyncSession, skip: int = 0, limit: int = 100) -> List[TestResponse]:
         """Get all tests with pagination"""
         try:
             repo = TestRepository(db)
             tests = await repo.get_all_tests(skip=skip, limit=limit)
-            
+
             # Format responses with creator info
             responses = []
             for test in tests:
                 creator = await self._get_user_by_id(test.created_by, db)
                 response = await self._format_test_response(test, creator)
                 responses.append(response)
-            
+
             return responses
-            
+
         except Exception as e:
             logger.error(f"Error getting all tests: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to get tests: {str(e)}"
             )
-    
+
     async def get_tests_by_creator(self, creator_id: int, db: AsyncSession, skip: int = 0, limit: int = 100) -> List[TestResponse]:
         """Get tests created by a specific user"""
         try:
             repo = TestRepository(db)
             tests = await repo.get_tests_by_recruiter(recruiter_id=creator_id, skip=skip, limit=limit)
-            
+
             # Get creator info once
             creator = await self._get_user_by_id(creator_id, db)
-            
+
             # Format responses
             responses = []
             for test in tests:
                 response = await self._format_test_response(test, creator)
                 responses.append(response)
-            
+
             return responses
-            
+
         except Exception as e:
             logger.error(f"Error getting tests by creator {creator_id}: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to get tests: {str(e)}"
             )
-    
+
     async def get_test_by_id(self, test_id: int, db: AsyncSession) -> TestResponse:
         """Get a test by ID"""
         try:
             repo = TestRepository(db)
             test = await repo.get_test_by_id(test_id)
-            
+
             if not test:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Test not found"
                 )
-            
+
             # Get creator info
             creator = await self._get_user_by_id(test.created_by, db)
-            
+
             return await self._format_test_response(test, creator)
-            
+
         except HTTPException:
             raise
         except Exception as e:
@@ -390,12 +396,12 @@ class TestService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to get test: {str(e)}"
             )
-    
+
     async def update_test(self, test_id: int, test_data: TestUpdate, updated_by: int, db: AsyncSession) -> TestResponse:
         """Update a test"""
         try:
             repo = TestRepository(db)
-            
+
             # Check if test exists and user has permission
             test = await repo.get_test_by_id(test_id)
             if not test:
@@ -403,6 +409,7 @@ class TestService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Test not found"
                 )
+
             
             # Get the current test before update
             current_test = await repo.get_test_by_id(test_id)
@@ -412,6 +419,7 @@ class TestService:
             if "job_description" in test_data.dict(exclude_unset=True):
                 if test_data.job_description is not None and test_data.job_description != current_test.job_description:
                     job_desc_updated = True
+
 
             # Update the test
             updated_test = await repo.update_test(test_id, test_data, updated_by)
@@ -431,7 +439,7 @@ class TestService:
             # await self.notification_service.send_test_created_notification(updated_test, creator)
 
             return await self._format_test_response(updated_test, creator)
-            
+
         except HTTPException:
             raise
         except Exception as e:
@@ -440,12 +448,12 @@ class TestService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to update test: {str(e)}"
             )
-    
+
     async def delete_test(self, test_id: int, db: AsyncSession) -> Dict[str, str]:
         """Delete a test"""
         try:
             repo = TestRepository(db)
-            
+
             # Check if test exists
             test = await repo.get_test_by_id(test_id)
             if not test:
@@ -453,22 +461,22 @@ class TestService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Test not found"
                 )
-            
+
             # Get creator info for notification
             creator = await self._get_user_by_id(test.created_by, db)
-            
+
             # Delete the test
             await repo.delete_test(test_id)
-            
+
             # Send notification
             await self.notification_service.notify_test_deleted(
                 test_name=test.test_name,
                 test_id=test_id,
                 recruiter_email=creator.email
             )
-            
+
             return {"message": "Test deleted successfully"}
-            
+
         except HTTPException:
             raise
         except Exception as e:
@@ -485,8 +493,9 @@ class TestService:
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         return user
-    
+
     async def _format_test_response(self, test: Test, creator: User = None) -> TestResponse:
+
         """Format test response with creator info, total candidates, and duration"""
         import json
         from app.repositories.candidate_count_helper import count_candidates_by_test_id
@@ -541,14 +550,18 @@ class TestService:
             duration=duration
         )
 
+
 # Service instance
 test_service = TestService()
+
 
 def get_test_service() -> TestService:
     """Get test service instance"""
     return test_service
 
 # Alias for backward compatibility
+
+
 def get_enhanced_test_service() -> TestService:
     """Get enhanced test service instance (alias)"""
     return test_service
