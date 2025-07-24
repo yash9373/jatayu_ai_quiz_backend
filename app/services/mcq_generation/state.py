@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import List, Literal, Optional, Tuple, Dict
 from app.services.jd_parsing.state import JobDescriptionFields
-from resume_parsing_state import ResumeFields
+from app.services.resume_parsing.state import ResumeFields
 from skill_graph_state import SkillGraph
 
 
