@@ -548,7 +548,7 @@ class WebSocketConnectionManager:
             # Create assessment instance in database
             assessment_repo = AssessmentRepository(db)
             assessment_id = await assessment_repo.create_assessment_instance(
-                application_id=application_id or 0,  # Use 0 as fallback if no application
+                application_id=application_id,  # Use None if no application
                 user_id=user_id,
                 test_id=test_id
             )
