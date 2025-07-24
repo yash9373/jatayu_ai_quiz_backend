@@ -10,3 +10,4 @@ python-dotenv
 alembic
 email-validator
 fastapi-cors
+websockets  # For WebSocket test client

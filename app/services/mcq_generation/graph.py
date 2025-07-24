@@ -1,0 +1,702 @@
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.checkpoint.memory import MemorySaver
+from langchain_openai import ChatOpenAI
+from mcq_generation.state import AgentState, GraphNodeState, Question, Response, UserResponse, SubmitResponsePayload, GenerateQuestionPayload, ExitPayload
+from skill_graph_state import SkillGraph, SkillNode
+from typing import List, Dict, Tuple, Optional
+from langgraph.graph import StateGraph, END, START
+from langgraph.types import interrupt, Command
+from datetime import datetime
+import json
+from langchain_core.messages import HumanMessage
+from psycopg_pool import AsyncConnectionPool
+from psycopg.rows import dict_row
+import os
+from dotenv import load_dotenv
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+load_dotenv()
+# Add your LLM import here - replace with your actual LLM instance
+# from your_llm_module import llm
+
+
+def get_llm():
+    """Get LLM instance lazily to avoid initialization issues during import."""
+    return ChatOpenAI(
+        model="gpt-4o",
+        temperature=0.1,
+    )
+
+
+# Configuration constants
+PASS_THRESHOLD = 0.6  # 60% pass threshold
+
+# Questions per difficulty level
+QUESTIONS_PER_DIFFICULTY = {
+    "H": 5,  # High priority skills - 5 questions
+    "M": 5,  # Medium priority skills - 5 questions
+    "L": 5   # Low priority skills - 5 questions
+}
+
+
+def generate_question_for_node(
+    context: Dict,
+    resume_text: str = "",
+    level: int = 1,
+    questions_per_level: int = 1,
+    max_level: int = 3
+) -> Dict:
+    """
+    Generate MCQ for a skill node using the assembled context
+    """
+    current_skill = context["current_skill"]
+    priority = context["priority"]
+    node_history = context["node_history"]
+    recent_history = context["recent_history"]
+
+    # Build context-aware prompt
+    difficulty_map = {"H": "advanced", "M": "intermediate", "L": "beginner"}
+    difficulty = difficulty_map.get(priority, "intermediate")
+
+    # Include recent performance context if available
+    performance_context = ""
+    questions_asked_count = len(node_history["questions_asked"])
+    max_questions_for_priority = QUESTIONS_PER_DIFFICULTY.get(priority, 5)
+
+    if questions_asked_count > 0:
+        performance_context = f"\nCandidate has answered {questions_asked_count}/{max_questions_for_priority} questions on this skill with current score: {node_history['current_score']:.1%}"
+
+    if recent_history:
+        performance_context += f"\nRecent performance across skills: {len(recent_history)} recent interactions"
+
+    prompt = f"""
+You are an AI MCQ generator for technical assessments.
+
+Generate one multiple-choice question (MCQ) about the skill: "{current_skill}".
+The question should match {difficulty} difficulty level (Priority: {priority}).
+
+Context about candidate's session:
+- Total questions asked: {context['overall_metrics']['total_questions_asked']}
+- Session start: {context['overall_metrics']['session_start']}
+{performance_context}
+
+Personalize the question using the candidate's resume if related experience is found.
+
+Requirements:
+- Provide exactly 4 answer options
+- Only one correct answer
+- Keep the question scenario-based or applied when possible
+- Include a field for "matched_resume_info" (if resume mentions this skill or a related project/tool)
+
+Skill Notes (if any): {current_skill}
+Resume:
+\"\"\"
+{resume_text}
+\"\"\"
+
+Return only valid JSON in this format:
+{{
+  "question_text": "...",
+  "options": ["A", "B", "C", "D"],
+  "correct_answer": "",
+  "difficulty": "{difficulty}",
+  "node": "{current_skill}",
+  "level": {level},
+  "matched_resume_info": "..."
+}}
+"""
+
+    try:
+        llm = get_llm()
+        response = llm.invoke([HumanMessage(content=prompt)])
+        raw_content = response.content
+        if isinstance(raw_content, list):
+            if raw_content and isinstance(raw_content[0], str):
+                raw = raw_content[0].strip()
+            elif raw_content and isinstance(raw_content[0], dict):
+                raw = json.dumps(raw_content[0])
+            else:
+                raw = ""
+        elif isinstance(raw_content, str):
+            raw = raw_content.strip()
+        else:
+            raw = str(raw_content).strip()
+
+        if raw.startswith("```json"):
+            raw = raw.removeprefix("```json").removesuffix("```").strip()
+        elif raw.startswith("```"):
+            raw = raw.removeprefix("```").removesuffix("```").strip()
+        return json.loads(raw)
+
+    except Exception as e:
+        return {
+            "question_text": f"ERROR: {e}",
+            "options": [],
+            "correct_answer": None,
+            "difficulty": "error",
+            "node": current_skill,
+            "level": level,
+            "matched_resume_info": ""
+        }
+
+
+def flatten_graph(skill_nodes: List[SkillNode], depth: int = 0, parent: Optional[str] = None):
+    flat = []
+    for node in skill_nodes:
+        flat.append({
+            "node_id": node.skill,
+            "priority": node.priority,
+            "depth": depth,
+            "children": [child.skill for child in node.subskills]
+        })
+        flat.extend(flatten_graph(node.subskills, depth + 1, node.skill))
+    return flat
+
+
+def compute_assessment_order(skill_graph: SkillGraph) -> List[str]:
+    flat = flatten_graph(skill_graph.root_nodes)
+    seen = set()
+    unique = []
+    for item in flat:
+        if item["node_id"] not in seen:
+            seen.add(item["node_id"])
+            unique.append(item)
+    unique.sort(key=lambda x: ("HML".index(x["priority"]), x["depth"]))
+    return [u["node_id"] for u in unique]
+
+
+def initialize(state: AgentState):
+    """
+    Initialize the agent state with:
+    1. Flattened and ordered skill nodes
+    2. Candidate graph with empty node states
+    3. Node queue for processing order
+    4. Metadata and counters
+    """
+    print("Initializing agent state...")
+    # Ensure the skill graph is valid
+    if state.start_time:
+        print("Agent state already initialized, skipping.")
+        print(state)
+        return state
+
+    # Get ordered nodes based on priority and depth
+    ordered_nodes = compute_assessment_order(state.skill_graph)
+
+    # Create a lookup map for efficient node finding
+    node_lookup = {}
+
+    def build_lookup(nodes):
+        for node in nodes:
+            node_lookup[node.skill] = node
+            build_lookup(node.subskills)
+
+    build_lookup(state.skill_graph.root_nodes)
+
+    # Initialize candidate_graph with proper GraphNodeState objects
+    candidate_graph = []
+    for node_id in ordered_nodes:
+        ref_node = node_lookup.get(node_id)
+        if ref_node:
+            candidate_graph.append(
+                GraphNodeState(
+                    node_id=node_id,
+                    priority=ref_node.priority,
+                    score=0.0,
+                    status="not_started",
+                    asked_questions=[],
+                    responses=[]
+                )
+            )
+
+    # Set up the processing queue
+    node_queue = [node.node_id for node in candidate_graph]
+
+    # Return updated state using .copy(update={...}) for proper persistence
+    return state.model_copy(deep=True, update={
+        "start_time": datetime.now().isoformat(),
+        "total_questions_asked": 0,
+        "last_node_id": None,
+        "candidate_graph": candidate_graph,
+        "node_queue": node_queue
+    }).model_dump()
+
+
+def generate_question(state: AgentState):
+    """
+    Stage 2: Ask Question Node - Generate and deliver the next MCQ
+
+    Node Completion Logic:
+    1. If we have a current node (last_node_id), we continue asking questions for that node
+    2. A node is considered completed when:
+       - All questions for the difficulty level are asked (H=5, M=5, L=5), OR
+       - The node passes the threshold (70%), OR
+       - The node status is already marked as "completed"
+    3. Only when a node is completed do we move to the next node in the queue
+    4. This ensures all questions for a skill are asked before moving to the next skill
+
+    Flow:
+    - Stay on current node until completion criteria met
+    - Generate question → interrupt → wait for response → process → check completion
+    - If node complete: mark completed, clear last_node_id, get next node from queue
+    - If node incomplete: stay on same node for next question
+    """
+    print("Generating question for current node...")
+
+    # Step 1: Determine current node to work with
+    current_node_id = None
+    current_node_state = None
+
+    # Check if we're continuing with an existing node
+    if state.last_node_id:
+        # Find the current node state
+        for node_state in state.candidate_graph:
+            if node_state.node_id == state.last_node_id:
+                current_node_state = node_state
+                current_node_id = state.last_node_id
+                break
+
+        # Check if current node is completed
+        if current_node_state:
+            max_questions_for_difficulty = QUESTIONS_PER_DIFFICULTY.get(
+                current_node_state.priority, 5)
+            questions_asked = len(current_node_state.asked_questions)
+
+            # Node is completed if:
+            # 1. Reached max questions for difficulty, OR
+            # 2. Passed the threshold, OR
+            # 3. Status is already completed
+            current_score = current_node_state.score if current_node_state.score is not None else 0.0
+            if (questions_asked >= max_questions_for_difficulty or
+                current_score >= PASS_THRESHOLD or
+                    current_node_state.status == "completed"):
+
+                # Mark as completed and move to next node
+                updated_candidate_graph = []
+                for node_state in state.candidate_graph:
+                    if node_state.node_id == current_node_state.node_id:
+                        # Mark this node as completed
+                        updated_node = GraphNodeState(
+                            node_id=node_state.node_id,
+                            priority=node_state.priority,
+                            score=node_state.score,
+                            status="completed",
+                            asked_questions=node_state.asked_questions.copy(),
+                            responses=node_state.responses.copy()
+                        )
+                        updated_candidate_graph.append(updated_node)
+                    else:
+                        updated_candidate_graph.append(node_state)
+
+                # Update state and clear current node
+                state = state.model_copy(deep=True, update={
+                    "candidate_graph": updated_candidate_graph,
+                    "last_node_id": None
+                })
+                current_node_id = None
+                current_node_state = None
+
+    # Step 2: If no current node, get next node from queue
+    if not current_node_id:
+        if not state.node_queue:
+            # No more nodes to process
+            return state.model_copy(deep=True, update={"last_node_id": None})
+
+        # Get next node from queue - create new queue without first element
+        current_node_id = state.node_queue[0]
+        new_node_queue = state.node_queue[1:]
+
+        # Find the node state and update its status
+        updated_candidate_graph = []
+        for node_state in state.candidate_graph:
+            if node_state.node_id == current_node_id:
+                # Update this node's status to in_progress
+                updated_node = GraphNodeState(
+                    node_id=node_state.node_id,
+                    priority=node_state.priority,
+                    score=node_state.score,
+                    status="in_progress",
+                    asked_questions=node_state.asked_questions.copy(),
+                    responses=node_state.responses.copy()
+                )
+                updated_candidate_graph.append(updated_node)
+                current_node_state = updated_node
+            else:
+                updated_candidate_graph.append(node_state)
+
+        # Update state with new queue and candidate graph
+        state = state.model_copy(deep=True, update={
+            "node_queue": new_node_queue,
+            "last_node_id": current_node_id,
+            "candidate_graph": updated_candidate_graph
+        })
+
+    if not current_node_state:
+        # Skip if node not found in candidate graph
+        return Command(goto="generate_question", update=state.model_dump())
+
+    # Step 3: Check if we can ask more questions for this node
+    max_questions_for_difficulty = QUESTIONS_PER_DIFFICULTY.get(
+        current_node_state.priority, 5)
+    questions_asked = len(current_node_state.asked_questions)
+
+    if questions_asked >= max_questions_for_difficulty:
+        # This node is done, mark completed and try next
+        updated_candidate_graph = []
+        for node_state in state.candidate_graph:
+            if node_state.node_id == current_node_state.node_id:
+                updated_node = GraphNodeState(
+                    node_id=node_state.node_id,
+                    priority=node_state.priority,
+                    score=node_state.score,
+                    status="completed",
+                    asked_questions=node_state.asked_questions.copy(),
+                    responses=node_state.responses.copy()
+                )
+                updated_candidate_graph.append(updated_node)
+            else:
+                updated_candidate_graph.append(node_state)
+
+        updated_state = state.model_copy(deep=True, update={
+            "candidate_graph": updated_candidate_graph,
+            "last_node_id": None
+        })
+        return Command(goto="generate_question", update=updated_state.model_dump())
+
+    current_score = current_node_state.score if current_node_state.score is not None else 0.0
+    if current_score >= PASS_THRESHOLD and questions_asked > 0:
+        # Node passed, mark completed and try next
+        updated_candidate_graph = []
+        for node_state in state.candidate_graph:
+            if node_state.node_id == current_node_state.node_id:
+                updated_node = GraphNodeState(
+                    node_id=node_state.node_id,
+                    priority=node_state.priority,
+                    score=node_state.score,
+                    status="completed",
+                    asked_questions=node_state.asked_questions.copy(),
+                    responses=node_state.responses.copy()
+                )
+                updated_candidate_graph.append(updated_node)
+            else:
+                updated_candidate_graph.append(node_state)
+
+        updated_state = state.model_copy(deep=True, update={
+            "candidate_graph": updated_candidate_graph,
+            "last_node_id": None
+        })
+        return Command(goto="generate_question", update=updated_state.model_dump())
+
+    # Step 4: Assemble Context for question generation
+    context = {
+        "current_skill": current_node_id,
+        "priority": current_node_state.priority,
+        "node_history": {
+            "questions_asked": current_node_state.asked_questions,
+            "responses": current_node_state.responses,
+            "current_score": current_node_state.score
+        },
+        "recent_history": [],
+        "overall_metrics": {
+            "total_questions_asked": state.total_questions_asked,
+            "session_start": state.start_time
+        }
+    }
+
+    # Get recent history (last 3 Q&A pairs across all nodes)
+    all_recent_qas = []
+    for node_state in state.candidate_graph:
+        if node_state.status in ["in_progress", "completed"] and node_state.asked_questions:
+            for i, question_id in enumerate(node_state.asked_questions):
+                if i < len(node_state.responses):
+                    response_id = node_state.responses[i]
+                    question = state.generated_questions.get(question_id)
+                    response = state.candidate_response.get(response_id)
+                    if question and response:
+                        all_recent_qas.append({
+                            "skill": node_state.node_id,
+                            "question": question,
+                            "response": response
+                        })
+
+    # Sort by recency and take last 3
+    context["recent_history"] = all_recent_qas[-3:] if len(
+        all_recent_qas) > 3 else all_recent_qas
+
+    # Step 5: Generate MCQ for current node
+    resume_text = ""  # You can add resume text here later if needed
+
+    generated_mcq = generate_question_for_node(
+        context=context,
+        resume_text=resume_text,
+        level=1,
+        questions_per_level=1,
+        max_level=3
+    )
+
+    print(f"Generated MCQ: {generated_mcq}")
+    # Create a Question object from the generated MCQ
+    question = None
+    if generated_mcq and "question_text" in generated_mcq:
+        question = Question(
+            question_id=f"{current_node_id}_{len(current_node_state.asked_questions) + 1}",
+            node_id=current_node_id,
+            prompt=generated_mcq["question_text"],
+            correct_option=generated_mcq.get("correct_answer", "A"),
+            options=generated_mcq.get("options", []),
+            meta={
+                "difficulty": generated_mcq.get("difficulty", "intermediate"),
+                "level": generated_mcq.get("level", 1),
+                "matched_resume_info": generated_mcq.get("matched_resume_info", "")
+            }
+        )
+
+        # Update state with new question and candidate graph
+        updated_candidate_graph = []
+        for node_state in state.candidate_graph:
+            if node_state.node_id == current_node_id:
+                # Add question to this node's asked_questions
+                updated_node = GraphNodeState(
+                    node_id=node_state.node_id,
+                    priority=node_state.priority,
+                    score=node_state.score,
+                    status=node_state.status,
+                    asked_questions=node_state.asked_questions +
+                    [question.question_id],
+                    responses=node_state.responses.copy()
+                )
+                updated_candidate_graph.append(updated_node)
+            else:
+                updated_candidate_graph.append(node_state)
+
+        # Update state with all changes
+        state = state.model_copy(deep=True, update={
+            "candidate_graph": updated_candidate_graph,
+            "generated_questions": {**state.generated_questions, question.question_id: question},
+            "total_questions_asked": state.total_questions_asked + 1,
+            "question_queue": state.question_queue + [question.question_id]
+        })
+
+    # Update recent_history in state for future context building
+    # recent_qa_pairs = []
+    # for node_state in state.candidate_graph:
+    #     if node_state.status in ["in_progress", "completed"] and node_state.asked_questions:
+    #         for i, question_id in enumerate(node_state.asked_questions):
+    #             if i < len(node_state.responses):
+    #                 response_id = node_state.responses[i]
+    #                 question = state.generated_questions.get(question_id)
+    #                 response = state.candidate_response.get(response_id)
+    #                 if question and response:
+    #                     recent_qa_pairs.append((question, response))
+
+    # # Keep only the last 3 Q&A pairs
+    # state.recent_history = recent_qa_pairs[-3:] if len(
+    #     recent_qa_pairs) > 3 else recent_qa_pairs
+
+    # Step 6: Use interrupt to pause and wait for user response
+    if question:
+        print(f"Generated question: {question.prompt}")
+        # Question queue already updated above in state.model_copy(deep=True,)
+
+    # Update metadata
+    final_state = state.model_copy(deep=True, update={
+        "metadata": {
+            "message": f"Generated question for node {current_node_id}: {question.prompt if question else 'No question generated.'}",
+            "total_questions_asked": state.total_questions_asked,
+            "current_node_id": current_node_id,
+            "current_node_state": current_node_state,
+            "generated_question_id": question.question_id if question else None,
+        }
+    })
+    return Command(
+        goto="interrupt_node",
+        update=final_state.model_dump(),
+    )
+
+
+def interrupt_node(state: AgentState):
+    """
+    """
+    print("Handling interrupt node...")
+    user_response = interrupt({
+        "metadata": state.metadata,
+    })
+
+    try:
+        user_response = UserResponse.model_validate(user_response)
+    except Exception as e:
+        print(f"Error validating user response: {e}")
+        print("Invalid user response format, expected a dictionary.")
+        error_state = state.model_copy(deep=True, update={
+            "metadata": {
+                "error": "Invalid user response format. Expected a dictionary."
+            }
+        })
+        return Command(
+            goto="interrupt_node",
+            update=error_state
+        )
+
+    match user_response.type:
+        case "submit_response":
+            try:
+                user_response = SubmitResponsePayload.model_validate(
+                    user_response.model_dump())
+            except Exception as e:
+                print(f"Error validating submit response payload: {e}")
+                error_state = state.model_copy(deep=True, update={
+                    "metadata": {
+                        "error": "Invalid submit response payload format."
+                    }
+                })
+                return Command(
+                    goto="interrupt_node",
+                    update=error_state
+                )
+
+            question_id = user_response.payload.question_id
+            question = state.generated_questions.get(question_id)
+            if not question:
+                error_state = state.model_copy(deep=True, update={
+                    "metadata": {
+                        "error": f"Question {question_id} not found in generated questions."
+                    }
+                })
+                return Command(
+                    goto="interrupt_node",
+                    update=error_state.model_dump()
+                )
+
+            # Create the response object
+            response = Response(
+                question_id=question_id,
+                selected_option=user_response.payload.selected_option,
+                is_correct=question.correct_option == user_response.payload.selected_option
+            )
+
+            # Update candidate_graph with new response
+            updated_candidate_graph = []
+            for node_state in state.candidate_graph:
+                if question_id in node_state.asked_questions:
+                    # Add response to this node's responses
+                    updated_node = GraphNodeState(
+                        node_id=node_state.node_id,
+                        priority=node_state.priority,
+                        score=node_state.score,
+                        status=node_state.status,
+                        asked_questions=node_state.asked_questions.copy(),
+                        responses=node_state.responses + [question_id]
+                    )
+                    updated_candidate_graph.append(updated_node)
+                else:
+                    updated_candidate_graph.append(node_state)
+
+            # Remove question from queue
+            new_question_queue = [
+                q for q in state.question_queue if q != question_id]
+
+            # Update state
+            updated_state = state.model_copy(deep=True, update={
+                "candidate_response": {**state.candidate_response, question_id: response},
+                "candidate_graph": updated_candidate_graph,
+                "question_queue": new_question_queue,
+                "metadata": {
+                    "message": f"Response recorded for question {question_id}."
+                }
+            })
+            return Command(
+                goto="interrupt_node",
+                update=updated_state.model_dump()
+            )
+        case "generate_question":
+            print("Generating next question...")
+            updated_state = state.model_copy(deep=True, update={
+                "metadata": {
+                    "message": "Generating next question..."
+                }
+            })
+            return Command(
+                goto="generate_question",
+                update=updated_state.model_dump()
+            )
+        case "exit":
+            print("Exiting assessment...")
+            updated_state = state.model_copy(deep=True, update={
+                "metadata": {
+                    "message": "Exiting assessment."
+                }
+            })
+            return Command(
+                goto=END,
+                update=updated_state.model_dump()
+            )
+
+
+raw_graph = StateGraph(AgentState)
+
+# Add nodes to the graph
+raw_graph.add_node("initialize", initialize)
+raw_graph.add_node("generate_question", generate_question)
+raw_graph.add_node("interrupt_node", interrupt_node)
+# Define the flow
+raw_graph.add_edge(START, "initialize")
+raw_graph.add_edge("initialize", "interrupt_node")
+
+# Global connection pool for PostgreSQL
+_connection_pool = None
+
+
+async def get_connection_pool():
+    """Get or create a global connection pool"""
+    global _connection_pool
+    if _connection_pool is None:
+        _connection_pool = AsyncConnectionPool(
+            conninfo=f"postgresql://{os.getenv('PSQL_USERNAME')}:{os.getenv('PSQL_PASSWORD')}@{os.getenv('PSQL_HOST')}:{os.getenv('PSQL_PORT')}/{os.getenv('PSQL_DATABASE_LANGGRAPH')}",
+            max_size=20,
+            kwargs={
+                "autocommit": True,
+                "prepare_threshold": 0,
+                "row_factory": dict_row,
+            }
+        )
+        # Open the pool
+        await _connection_pool.open()
+    return _connection_pool
+
+
+async def close_connection_pool():
+    """Close the global connection pool"""
+    global _connection_pool
+    if _connection_pool is not None:
+        await _connection_pool.close()
+        _connection_pool = None
+
+
+async def setup_database_tables():
+    """Setup required database tables for LangGraph checkpointing"""
+    pool = await get_connection_pool()
+    async with pool.connection() as conn:
+        checkpointer = AsyncPostgresSaver(conn)
+        # This will create the necessary tables if they don't exist
+        await checkpointer.setup()
+
+
+async def get_question_generation_graph():
+    """Get the compiled graph with PostgreSQL checkpointer"""
+    # Setup database tables first
+    await setup_database_tables()
+
+    pool = await get_connection_pool()
+
+    # Get a connection from the pool for the checkpointer
+    # Note: We're not using async with here because we want the connection to persist
+    conn = await pool.getconn()
+
+    # Create the checkpointer with the persistent connection
+    checkpointer = AsyncPostgresSaver(
+        conn, serde=JsonPlusSerializer(pickle_fallback=True))
+
+    return raw_graph.compile(
+        checkpointer=checkpointer,
+        # Updated to match new node structure
+        # interrupt_after=["interrupt_node"]
+    )
