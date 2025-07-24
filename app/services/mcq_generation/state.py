@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 from typing import List, Literal, Optional, Tuple, Dict
 from app.services.jd_parsing.state import JobDescriptionFields
 from app.services.resume_parsing.state import ResumeFields
-from skill_graph_state import SkillGraph
+from app.services.skill_graph_generation.state import SkillGraph
 
 
 class UserResponse(BaseModel):
