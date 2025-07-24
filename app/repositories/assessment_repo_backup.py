@@ -78,7 +78,8 @@ class AssessmentRepository:
                     Assessment.test_id == test_id
                 )
             )
-            return result.scalar_one_or_none()        except Exception as e:
+            return result.scalar_one_or_none()
+        except Exception as e:
             logger.error(f"Error checking existing assessment for user {user_id}, test {test_id}: {str(e)}")
             return None
     
