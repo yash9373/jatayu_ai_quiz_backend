@@ -35,7 +35,6 @@ class CandidateApplicationResponse(CandidateApplicationBase):
     application_id: int
     candidate_name: Optional[str] = None
     candidate_email: Optional[str] = None
-    screening_status: Optional[str] = None
     class Config:
         from_attributes = True
         orm_mode = True
@@ -73,7 +72,6 @@ class CandidateApplicationSummaryResponse(BaseModel):
     resume_link: str
     resume_score: Optional[int] = None
     is_shortlisted: Optional[bool] = None
-    screening_status: Optional[str] = None
     
     class Config:
         from_attributes = True

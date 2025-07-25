@@ -53,15 +53,9 @@ def screen_resume_task(application_id, resume_link, job_description, min_resume_
         from app.services.ai_screening_service import AIScreeningService
         from app.models.candidate_application import CandidateApplication
         from app.models.assessment import Assessment
+        import json
         service = AIScreeningService()
         async with AsyncSessionLocal() as db:
-            # Set default status to pending before screening
-            update_data = {
-                "screening_status": "pending",
-                "is_shortlisted": False
-            }
-            await CandidateApplicationRepository.update_application(db, application_id, update_data)
-
             # Download and extract resume
             resume_text = None
             try:
@@ -90,21 +84,16 @@ def screen_resume_task(application_id, resume_link, job_description, min_resume_
             screening_result = service.screen_resume_text(resume_text, job_description, min_resume_score=min_resume_score)
             print("[Celery] screening_result:", screening_result)
 
-            # Determine shortlist status
-            is_shortlisted = screening_result.get("is_shortlisted")
-            if is_shortlisted is None:
-                is_shortlisted = False
-
             # Update CandidateApplication in DB with mapped AI output fields
             update_data = {
                 "resume_text": resume_text,
-                "parsed_resume": service._parse_resume_basic(resume_text),
+                "parsed_resume": json.dumps(service._parse_resume_basic(resume_text)),
                 "resume_score": screening_result.get("match_score"),
                 "skill_match_percentage": screening_result.get("skills_match_score"),
                 "experience_score": screening_result.get("experience_alignment_score"),
                 "education_score": screening_result.get("certifications_score", screening_result.get("education_score", None)),
                 "ai_reasoning": screening_result.get("reason"),
-                "is_shortlisted": is_shortlisted,
+                "is_shortlisted": screening_result.get("is_shortlisted", False),
                 "shortlist_reason": screening_result.get("shortlist_reason", None),
                 "screening_completed_at": datetime.utcnow(),
                 "screening_status": "completed"

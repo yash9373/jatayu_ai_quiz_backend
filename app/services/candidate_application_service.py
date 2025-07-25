@@ -52,7 +52,6 @@ class CandidateApplicationService:
                 "is_shortlisted": app.is_shortlisted,
                 "candidate_name": app.user.name if app.user else None,
                 "candidate_email": app.user.email if app.user else None,
-                "screening_status": app.screening_status if hasattr(app, "screening_status") else None,
             }
             response_list.append(CandidateApplicationSummaryResponse(**app_dict))
         return response_list
@@ -157,8 +156,7 @@ class CandidateApplicationService:
             applied_at=application.applied_at,
             updated_at=application.updated_at,
             candidate_name=application.user.name,
-            candidate_email=application.user.email,
-            screening_status=application.screening_status if hasattr(application, "screening_status") else None
+            candidate_email=application.user.email
         )
 
     async def shortlist_bulk_candidates(self, db: AsyncSession, test_id: int, min_score: int):
