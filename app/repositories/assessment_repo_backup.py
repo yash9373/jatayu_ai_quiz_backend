@@ -8,27 +8,26 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
 class AssessmentRepository:
     """Repository for Assessment entity operations"""
-
+    
     def __init__(self, db: AsyncSession):
         self.db = db
-
+    
     async def create_assessment_instance(
-        self,
-        application_id: int,
-        user_id: int,
+        self, 
+        application_id: int, 
+        user_id: int, 
         test_id: int
     ) -> Optional[int]:
         """
         Create a new assessment instance when a candidate starts taking a test
-
+        
         Args:
             application_id: Candidate application ID
             user_id: User taking the assessment  
             test_id: Test blueprint ID
-
+            
         Returns:
             assessment_id if successful, None otherwise
         """
@@ -39,42 +38,37 @@ class AssessmentRepository:
                 user_id=user_id,
                 test_id=test_id,
                 created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
-            )
-
+                updated_at=datetime.utcnow()            )
+            
             self.db.add(assessment)
             await self.db.commit()
             await self.db.refresh(assessment)
-
+            
             # Get the actual ID value from the refreshed object
             assessment_id = getattr(assessment, 'assessment_id')
-            logger.info(
-                f"Created assessment instance {assessment_id} for user {user_id}, test {test_id}")
+            logger.info(f"Created assessment instance {assessment_id} for user {user_id}, test {test_id}")
             return assessment_id
-
+            
         except SQLAlchemyError as e:
-            logger.error(
-                f"Database error creating assessment instance: {str(e)}")
+            logger.error(f"Database error creating assessment instance: {str(e)}")
             await self.db.rollback()
             return None
         except Exception as e:
             logger.error(f"Error creating assessment instance: {str(e)}")
             await self.db.rollback()
             return None
-
+    
     async def get_assessment_by_id(self, assessment_id: int) -> Optional[Assessment]:
         """Get assessment by ID"""
         try:
             result = await self.db.execute(
-                select(Assessment).where(
-                    Assessment.assessment_id == assessment_id)
+                select(Assessment).where(Assessment.assessment_id == assessment_id)
             )
             return result.scalar_one_or_none()
         except Exception as e:
-            logger.error(
-                f"Error fetching assessment {assessment_id}: {str(e)}")
+            logger.error(f"Error fetching assessment {assessment_id}: {str(e)}")
             return None
-
+    
     async def get_user_assessment_for_test(self, user_id: int, test_id: int) -> Optional[Assessment]:
         """Check if user already has an assessment instance for this test"""
         try:
@@ -86,10 +80,9 @@ class AssessmentRepository:
             )
             return result.scalar_one_or_none()
         except Exception as e:
-            logger.error(
-                f"Error checking existing assessment for user {user_id}, test {test_id}: {str(e)}")
+            logger.error(f"Error checking existing assessment for user {user_id}, test {test_id}: {str(e)}")
             return None
-
+    
     async def update_assessment_status(self, assessment_id: int, status_data: dict) -> bool:
         """Update assessment with completion status and results"""
         try:
@@ -100,15 +93,14 @@ class AssessmentRepository:
                 updated_at=datetime.utcnow(),
                 **status_data  # Any additional status fields
             )
-
+            
             result = await self.db.execute(stmt)
             await self.db.commit()
-
+            
             return result.rowcount > 0
-
+            
         except Exception as e:
-            logger.error(
-                f"Error updating assessment {assessment_id}: {str(e)}")
+            logger.error(f"Error updating assessment {assessment_id}: {str(e)}")
             await self.db.rollback()
             return False
 
@@ -123,25 +115,3 @@ class AssessmentRepository:
         )
         await db.execute(stmt)
         await db.commit()
-
-    @staticmethod
-    async def bulk_create_assessments(db: AsyncSession, applications: list, test_id: int):
-        from sqlalchemy import select
-        for app in applications:
-            user_id = app.user_id
-            application_id = app.application_id
-            exists = await db.execute(
-                select(Assessment).where(Assessment.user_id == user_id, Assessment.test_id == test_id)
-            )
-            if not exists.scalar():
-                stmt = insert(Assessment).values(user_id=user_id, test_id=test_id, application_id=application_id)
-                await db.execute(stmt)
-        await db.commit()
-
-    @staticmethod
-    async def get_assessments_by_candidate(db: AsyncSession, user_id: int):
-        from sqlalchemy import select
-        result = await db.execute(
-            select(Assessment).where(Assessment.user_id == user_id)
-        )
-        return result.scalars().all()

@@ -3,6 +3,7 @@ from sqlalchemy.orm import relationship
 from app.db.base import Base
 from datetime import datetime
 
+
 class CandidateApplication(Base):
     __tablename__ = "candidate_applications"
 
@@ -22,6 +23,8 @@ class CandidateApplication(Base):
     screening_completed_at = Column(DateTime, nullable=True)
     notified_at = Column(DateTime, nullable=True)
     applied_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow,
+                        onupdate=datetime.utcnow)
 
     user = relationship("User", foreign_keys=[user_id])
+    assessments = relationship("Assessment", back_populates="application")
