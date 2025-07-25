@@ -91,7 +91,7 @@ def screen_resume_task(application_id, resume_link, job_description, min_resume_
                 "resume_score": screening_result.get("match_score"),
                 "skill_match_percentage": screening_result.get("skills_match_score"),
                 "experience_score": screening_result.get("experience_alignment_score"),
-                "education_score": screening_result.get("certifications_score", screening_result.get("education_score", None)),
+                "education_score": screening_result.get("education_score", None),
                 "ai_reasoning": screening_result.get("reason"),
                 "is_shortlisted": screening_result.get("is_shortlisted", False),
                 "shortlist_reason": screening_result.get("shortlist_reason", None),
@@ -100,4 +100,13 @@ def screen_resume_task(application_id, resume_link, job_description, min_resume_
             }
             print("[Celery] update_data:", update_data)
             await CandidateApplicationRepository.update_application(db, application_id, update_data)
-    asyncio.run(process())
+    # Use async-to-sync bridge to avoid closing event loop
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(process())
+        else:
+            loop.run_until_complete(process())
+    except RuntimeError:
+        asyncio.run(process())

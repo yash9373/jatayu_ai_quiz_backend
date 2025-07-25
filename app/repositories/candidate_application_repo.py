@@ -63,6 +63,7 @@ class CandidateApplicationRepository:
         application = result.scalar_one_or_none()
         if not application:
             return False
+        # Cascade delete handled by SQLAlchemy relationship
         await db.delete(application)
         await db.commit()
         return True

@@ -28,4 +28,8 @@ class CandidateApplication(Base):
                         onupdate=datetime.utcnow)
 
     user = relationship("User", foreign_keys=[user_id])
-    assessments = relationship("Assessment", back_populates="application")
+    assessments = relationship(
+        "Assessment",
+        back_populates="application",
+        cascade="all, delete-orphan"
+    )

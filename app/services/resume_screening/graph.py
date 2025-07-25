@@ -66,6 +66,12 @@ class ScreeningResult(BaseModel):
         ge=0,
         le=100
     )
+    education_score: Optional[int] = Field(
+        default=None,
+        description="Score for education alignment (0-100)",
+        ge=0,
+        le=100
+    )
     extraction_uncertainties: Optional[List[str]] = Field(
         default_factory=list,
         description="Any uncertainties or missing information that affected the evaluation"
@@ -79,11 +85,12 @@ You are an expert AI recruiter with deep experience in technical hiring and cand
 Your task is to evaluate a candidate's resume against a specific job description and provide a comprehensive scoring analysis.
 
 Evaluation Criteria and Weights:
-- Experience alignment (40%): How well does the candidate's work experience match the role requirements?
+- Experience alignment (35%): How well does the candidate's work experience match the role requirements?
 - Required skills match (20%): Coverage of must-have technical skills mentioned in the JD
 - Responsibility match (10%): Alignment between past responsibilities and job expectations
 - Preferred skills (5%): Coverage of nice-to-have skills and qualifications
 - Certifications (5%): Relevant professional certifications and credentials
+- Education alignment (5%): How well does the candidate's education match the job requirements? (Provide a separate education_score)
 - Soft skills (5%): Communication, leadership, teamwork abilities inferred from experience
 - Project impact (10%): Quality and relevance of projects showcasing technical abilities
 - Overall fit (5%): General alignment with company culture and role expectations
@@ -92,12 +99,12 @@ Instructions:
 1. Analyze the resume thoroughly against the job description
 2. Provide an overall match score from 0-100
 3. Give a concise but informative reason explaining the score
-4. Optionally provide individual category scores for detailed breakdown
+4. Provide individual category scores for detailed breakdown, including education_score (0-100)
 5. Note any missing information that could affect the evaluation
 6. Be objective and fair in your assessment
 7. Consider both strengths and areas of concern
 
-Focus on technical fit, experience relevance, and potential for success in the role.
+Focus on technical fit, experience relevance, education alignment, and potential for success in the role.
 """
 
 
@@ -138,11 +145,12 @@ You are an expert AI recruiter.
 Evaluate the following candidate resume against the given job description.
 
 Use these weights:
-- Experience alignment (40%)
+- Experience alignment (35%)
 - Required skills match (20%)
 - Responsibility match (10%)
 - Preferred skills (5%)
 - Certifications (5%)
+- Education alignment (5%)
 - Soft skills (5%)
 - Project impact (10%)
 - Overall fit (5%)
@@ -151,6 +159,7 @@ Your task:
 - Score the candidate from 0 to 100.
 - Provide a brief explanation of the score highlighting key strengths and weaknesses.
 - Consider both technical fit and experience relevance.
+- Provide a field named education_score (0-100) for education alignment in your output.
 
 Job Description:
 {json.dumps(jd, indent=2)}
