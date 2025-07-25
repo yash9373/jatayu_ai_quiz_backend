@@ -21,6 +21,7 @@ class CandidateApplication(Base):
     is_shortlisted = Column(Boolean, default=False)
     shortlist_reason = Column(Text, nullable=True)
     screening_completed_at = Column(DateTime, nullable=True)
+    screening_status = Column(String(20), default="pending", nullable=False)  # Added for async screening status
     notified_at = Column(DateTime, nullable=True)
     applied_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow,

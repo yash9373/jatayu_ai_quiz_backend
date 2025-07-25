@@ -38,7 +38,6 @@ class TestRepository:
 
     def __init__(self, db: AsyncSession):
         self.db = db
-<<<<<<< HEAD
     async def update_skill_graph(self, test_id: int, total_questions: int, question_distribution: str):
         query = (
             update(Test)
@@ -50,9 +49,6 @@ class TestRepository:
         )
         await self.db.execute(query)
         await self.db.commit()
-=======
-
->>>>>>> 7aee81dca91b19b18b761a1fbfeaebad44194706
     async def create_test(self, test_data: TestCreate, created_by: int) -> Test:
         """Create a new test"""
         try:

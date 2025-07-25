@@ -23,15 +23,49 @@ import random
 import string
 
 class CandidateApplicationService:
+    async def process_bulk_applications(self, db: AsyncSession, bulk_data: CandidateApplicationBulkCreate) -> CandidateApplicationBulkResponse:
+        results = []
+        success = 0
+        failed = 0
+        for app in bulk_data.applications:
+            try:
+                result = await self.process_single_application(db, app)
+                if "error" in result:
+                    failed += 1
+                else:
+                    success += 1
+                results.append(result)
+            except Exception as e:
+                results.append({"error": str(e)})
+                failed += 1
+        return CandidateApplicationBulkResponse(results=results, total=len(bulk_data.applications), success=success, failed=failed)
+    async def get_applications_summary_by_test_id(self, db: AsyncSession, test_id: int) -> List[CandidateApplicationSummaryResponse]:
+        applications = await CandidateApplicationRepository.get_applications_by_test_id_with_user(db, test_id)
+        response_list = []
+        for app in applications:
+            app_dict = {
+                "application_id": app.application_id,
+                "user_id": app.user_id,
+                "test_id": app.test_id,
+                "resume_link": app.resume_link,
+                "resume_score": app.resume_score,
+                "is_shortlisted": app.is_shortlisted,
+                "candidate_name": app.user.name if app.user else None,
+                "candidate_email": app.user.email if app.user else None,
+                "screening_status": app.screening_status if hasattr(app, "screening_status") else None,
+            }
+            response_list.append(CandidateApplicationSummaryResponse(**app_dict))
+        return response_list
     def __init__(self):
         self.ai_service = AIScreeningService()
+
+    # ...existing code for __init__ ...
 
     async def process_single_application(self, db: AsyncSession, data: CandidateApplicationCreate) -> Dict[str, Any]:
         # Check or create user by email
         user = await get_user_by_email(db, data.email)
         generated_password = None
         if not user:
-            # Generate random password
             generated_password = ''.join(random.choices(string.ascii_letters + string.digits + string.punctuation, k=12))
             hashed_password = get_password_hash(generated_password)
             name = data.name or data.email.split('@')[0]
@@ -43,73 +77,37 @@ class CandidateApplicationService:
         existing = await CandidateApplicationRepository.get_by_user_and_test(db, user_id, data.test_id)
         if existing:
             return {"error": "Application already exists for this user and test."}
-        # Download and extract resume
-        resume_text = self._download_and_extract_resume(data.resume_link)
         # Fetch JD/skill graph from test table
         test = await get_test_by_id(db, data.test_id)
         if not test:
             return {"error": "Test not found."}
-        # If test is in draft, move to preparing when first candidate applies
         if test.status == "draft":
             from app.repositories.test_repo import TestRepository
             await TestRepository(db).update_test_status(test.test_id, "preparing")
-        # AI screening
-        ai_result = self.ai_service.screen_resume_text(
-            resume_text=resume_text,
-            job_description=test.job_description,
-            parsed_job_description=test.parsed_job_description,
-            skill_graph=test.skill_graph,
-            min_resume_score=test.resume_score_threshold if test.auto_shortlist else None
-        )
-        # Prepare DB data
+        # Prepare DB data (no screening yet)
         app_data = data.dict()
         app_data["user_id"] = user_id
-        # Remove fields not in CandidateApplication model
         app_data.pop("email", None)
         app_data.pop("name", None)
-        # Calculate resume_score if not present
-        resume_score = ai_result.get("match_score")
-        if resume_score is None:
-            # Use weighted sum from prompt
-            weights = {
-                "experience_alignment_score": 0.4,
-                "skills_match_score": 0.2,
-                "responsibility_match_score": 0.1,
-                "preferred_skills_score": 0.05,
-                "certifications_score": 0.05,
-                "soft_skills_score": 0.05,
-                "project_impact_score": 0.1,
-                "overall_fit_score": 0.05,
-            }
-            total = 0.0
-            for k, w in weights.items():
-                score = ai_result.get(k)
-                if score is not None:
-                    total += score * w
-            resume_score = int(round(total))
         app_data.update({
-            "resume_text": resume_text,
-            "parsed_resume": ai_result.get("parsed_resume"),
-            "resume_score": resume_score,
-            "skill_match_percentage": ai_result.get("skills_match_score"),
-            "experience_score": ai_result.get("experience_alignment_score"),
-            "education_score": None,  # No direct mapping, set to None or map if available
-            "ai_reasoning": ai_result.get("reason"),
-            "is_shortlisted": ai_result.get("is_shortlisted"),
+            "resume_text": None,
+            "parsed_resume": None,
+            "resume_score": None,
+            "skill_match_percentage": None,
+            "experience_score": None,
+            "education_score": None,
+            "ai_reasoning": None,
+            "is_shortlisted": False,
             "applied_at": datetime.utcnow(),
             "updated_at": datetime.utcnow(),
-            "screening_completed_at": datetime.utcnow() if resume_score is not None else None
+            "screening_completed_at": None,
+            "screening_status": "pending"
         })
-        # Ensure parsed_resume is a string (JSON) if it's a dict
-        if isinstance(app_data.get("parsed_resume"), dict):
-            import json
-            app_data["parsed_resume"] = json.dumps(app_data["parsed_resume"])
         application = await CandidateApplicationRepository.create_application(db, app_data)
-        # Auto-shortlist logic: if enabled and shortlisted, insert into assessment
-        if ai_result.get("is_shortlisted"):
-            await self._insert_assessment(db, application)
-        
-        # Prepare response with user information
+        # Queue screening job to Celery (non-blocking)
+        from celery_app import screen_resume_task
+        screen_resume_task.delay(application.application_id, data.resume_link, test.job_description, test.resume_score_threshold if test.auto_shortlist else None)
+        # Prepare response
         response_dict = {
             "application_id": application.application_id,
             "user_id": application.user_id,
@@ -128,147 +126,18 @@ class CandidateApplicationService:
             "notified_at": application.notified_at,
             "applied_at": application.applied_at,
             "updated_at": application.updated_at,
+            "screening_status": application.screening_status if hasattr(application, "screening_status") else "pending",
             "candidate_name": data.name or data.email.split('@')[0],
             "candidate_email": data.email
         }
-        
         if generated_password:
             response_dict["generated_password"] = generated_password
         return response_dict
 
-    async def process_bulk_applications(self, db: AsyncSession, bulk_data: CandidateApplicationBulkCreate) -> CandidateApplicationBulkResponse:
-        results = []
-        success = 0
-        failed = 0
-        for app in bulk_data.applications:
-            try:
-                result = await self.process_single_application(db, app)
-                if "error" in result:
-                    failed += 1
-                else:
-                    success += 1
-                results.append(result)
-            except Exception as e:
-                results.append({"error": str(e)})
-                failed += 1
-        return CandidateApplicationBulkResponse(results=results, total=len(bulk_data.applications), success=success, failed=failed)
-
-    async def process_bulk_applications_concurrent(self, db: AsyncSession, bulk_data: CandidateApplicationBulkCreate, max_concurrent: int = 10) -> CandidateApplicationBulkResponse:
-        import asyncio
-        semaphore = asyncio.Semaphore(max_concurrent)
-        results = []
-        success = 0
-        failed = 0
-
-        async def sem_task(app):
-            async with semaphore:
-                try:
-                    result = await self.process_single_application(db, app)
-                    return result
-                except Exception as e:
-                    return {"error": str(e)}
-
-        tasks = [sem_task(app) for app in bulk_data.applications]
-        all_results = await asyncio.gather(*tasks)
-        for result in all_results:
-            if "error" in result:
-                failed += 1
-            else:
-                success += 1
-            results.append(result)
-        return CandidateApplicationBulkResponse(results=results, total=len(bulk_data.applications), success=success, failed=failed)
-
-    def _download_and_extract_resume(self, resume_link: str) -> str:
-        # Download PDF from Google Drive or direct link
-        try:
-            if 'drive.google.com' in resume_link:
-                import re
-                match = re.search(r'/d/([\w-]+)', resume_link)
-                if match:
-                    file_id = match.group(1)
-                    download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-                else:
-                    return "Error: Invalid Google Drive link."
-            else:
-                download_url = resume_link
-            response = requests.get(download_url, timeout=30, allow_redirects=True)
-            response.raise_for_status()
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-                tmp_file.write(response.content)
-                tmp_file_path = tmp_file.name
-            # Extract text
-            text = self.ai_service.extract_text_from_file(tmp_file_path)
-            os.remove(tmp_file_path)
-            return text
-        except Exception as e:
-            return f"Error downloading or extracting resume: {e}"
-
-    async def _insert_assessment(self, db: AsyncSession, application: CandidateApplication):
-        await AssessmentRepository.insert_assessment(
-            db,
-            application_id=application.application_id,
-            user_id=application.user_id,
-            test_id=application.test_id
-        )
-
-    async def get_applications_by_test_id(self, db: AsyncSession, test_id: int) -> List[CandidateApplicationResponse]:
-        """Get all candidate applications for a specific test."""
-        applications = await CandidateApplicationRepository.get_applications_by_test_id(db, test_id)
-        
-        response_list = []
-        for app in applications:
-            # Convert to dict and add user information
-            app_dict = {
-                "application_id": app.application_id,
-                "user_id": app.user_id,
-                "test_id": app.test_id,
-                "resume_link": app.resume_link,
-                "resume_text": app.resume_text,
-                "parsed_resume": app.parsed_resume,
-                "resume_score": app.resume_score,
-                "skill_match_percentage": app.skill_match_percentage,
-                "experience_score": app.experience_score,
-                "education_score": app.education_score,
-                "ai_reasoning": app.ai_reasoning,
-                "is_shortlisted": app.is_shortlisted,
-                "shortlist_reason": app.shortlist_reason,
-                "screening_completed_at": app.screening_completed_at,
-                "notified_at": app.notified_at,
-                "applied_at": app.applied_at,
-                "updated_at": app.updated_at,
-                "candidate_name": app.user.name if app.user else None,
-                "candidate_email": app.user.email if app.user else None
-            }
-            response_list.append(CandidateApplicationResponse(**app_dict))
-        
-        return response_list
-
-    async def get_applications_summary_by_test_id(self, db: AsyncSession, test_id: int) -> List[CandidateApplicationSummaryResponse]:
-        """Get minimal summary of candidate applications for a specific test."""
-        from app.schemas.candidate_application_schema import CandidateApplicationSummaryResponse
-        applications = await CandidateApplicationRepository.get_applications_by_test_id_with_user(db, test_id)
-        
-        response_list = []
-        for app in applications:
-            app_dict = {
-                "application_id": app.application_id,
-                "user_id": app.user_id,
-                "candidate_name": app.user.name if app.user else "Unknown",
-                "candidate_email": app.user.email if app.user else "Unknown",
-                "resume_link": app.resume_link,
-                "resume_score": app.resume_score,
-                "is_shortlisted": app.is_shortlisted
-            }
-            response_list.append(CandidateApplicationSummaryResponse(**app_dict))
-        
-        return response_list
-
     async def get_single_application_with_user(self, db: AsyncSession, application_id: int) -> Optional[CandidateApplicationResponse]:
-        """Get a single application with full details including user information."""
         application = await CandidateApplicationRepository.get_application_with_user_by_id(db, application_id)
         if not application:
             return None
-        
         return CandidateApplicationResponse(
             application_id=application.application_id,
             user_id=application.user_id,
@@ -288,13 +157,13 @@ class CandidateApplicationService:
             applied_at=application.applied_at,
             updated_at=application.updated_at,
             candidate_name=application.user.name,
-            candidate_email=application.user.email
+            candidate_email=application.user.email,
+            screening_status=application.screening_status if hasattr(application, "screening_status") else None
         )
 
     async def shortlist_bulk_candidates(self, db: AsyncSession, test_id: int, min_score: int):
         from app.repositories.candidate_application_repo import CandidateApplicationRepository
         from app.services.notification_service import NotificationService
-        # Get all applications for the test (with user info)
         applications = await CandidateApplicationRepository.get_applications_by_test_id_with_user(db, test_id)
         shortlisted = []
         notified_count = 0
@@ -308,7 +177,6 @@ class CandidateApplicationService:
                     "candidate_email": app.user.email if app.user else None,
                     "resume_score": app.resume_score
                 })
-                # Notify only if newly shortlisted
                 if not was_shortlisted:
                     try:
                         await NotificationService.notify_candidate_shortlisted(db, app)
