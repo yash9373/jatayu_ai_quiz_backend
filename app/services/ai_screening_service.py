@@ -1,9 +1,11 @@
 import os
 import json
 import re
+import logging
 from typing import Dict, Any, Optional
 from datetime import datetime
-
+from app.services.resume_screening import resume_screening_graph
+from app.services.resume_screening.graph import State as ResumeScreeningState
 try:
     from PyPDF2 import PdfReader
     PDF_AVAILABLE = True
@@ -30,11 +32,13 @@ except ImportError:
 
 class AIScreeningService:
     """Service for AI-powered resume screening and job matching using notebook logic"""
+    # Interface for resume-related tasks
     def __init__(self):
         self.api_key = os.getenv("OPENAI_API_KEY")
         self.ai_enabled = bool(self.api_key and self.api_key != "your-openai-api-key-here" and AI_AVAILABLE)
         if self.ai_enabled:
             self.client = OpenAI(api_key=self.api_key)
+        # ...existing code...
 
     def extract_text_from_file(self, file_path: str) -> str:
         if not file_path or not os.path.exists(file_path):
@@ -54,87 +58,30 @@ class AIScreeningService:
         except Exception as e:
             return f"Error extracting text: {e}"
 
-    def screen_resume_text(self, resume_text: str, job_description: str, parsed_job_description: Optional[str] = None, skill_graph: Optional[str] = None, min_resume_score: Optional[int] = None) -> Dict[str, Any]:
-        jd_context = job_description
-        if parsed_job_description:
-            jd_context += f"\n\nStructured JD Info:\n{parsed_job_description}"
-        if skill_graph:
-            jd_context += f"\n\nSkill Graph:\n{skill_graph}"
-        prompt = f"""
-You are an AI assistant helping recruiters evaluate resumes.
-Given the following job description and candidate resume, analyze and return a JSON object with:
-- resume_score (0–100)
-- skill_match_percentage
-- experience_score (0–100)
-- education_score (0–100)
-- ai_reasoning (1–2 sentence explanation)
-Job Description:
-{jd_context}
-Resume:
-{resume_text}
-"""
-        if not self.ai_enabled:
-            return self._screen_resume_mock(resume_text, job_description)
-        try:
-            response = self.client.chat.completions.create(
-                model="gpt-4",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2
-            )
-            result_json = json.loads(response.choices[0].message.content)
-        except Exception as e:
-            return {
-                "resume_score": 0,
-                "skill_match_percentage": 0,
-                "experience_score": 0,
-                "education_score": 0,
-                "ai_reasoning": f"AI error: {e}",
-                "is_shortlisted": False
-            }
-        is_shortlisted = False
-        if min_resume_score is not None:
-            try:
-                if float(result_json.get("resume_score", 0)) >= min_resume_score:
-                    is_shortlisted = True
-            except Exception:
-                pass
-        result_json["is_shortlisted"] = is_shortlisted
-        result_json["parsed_resume"] = self._parse_resume_basic(resume_text)
-        return result_json
-
-    def _screen_resume_mock(self, resume_text: str, job_description: str) -> Dict[str, Any]:
-        resume_lower = resume_text.lower()
-        jd_lower = job_description.lower()
-        skills = ['python', 'java', 'javascript', 'react', 'angular', 'vue', 'node.js',
-                 'django', 'flask', 'spring', 'sql', 'postgresql', 'mysql', 'mongodb',
-                 'aws', 'azure', 'docker', 'kubernetes', 'git', 'fastapi']
-        skill_matches = sum(1 for skill in skills if skill in resume_lower and skill in jd_lower)
-        total_skills = sum(1 for skill in skills if skill in jd_lower)
-        skill_percentage = (skill_matches / max(total_skills, 1)) * 100
-        experience_matches = re.findall(r'(\d+)[\+\s]*year', resume_lower)
-        years_experience = max([int(year) for year in experience_matches] + [0])
-        base_score = min(skill_percentage, 100)
-        experience_bonus = min(years_experience * 5, 20)
-        final_score = min(int(base_score + experience_bonus), 100)
-        reasoning = f"Mock AI Analysis: Found {skill_matches}/{total_skills} skill matches, "
-        reasoning += f"{years_experience} years experience. "
-        if final_score >= 80:
-            reasoning += "Strong match for the position."
-        elif final_score >= 60:
-            reasoning += "Good match with some gaps."
-        elif final_score >= 40:
-            reasoning += "Moderate match, needs development."
-        else:
-            reasoning += "Limited match for this position."
-        return {
-            'resume_score': final_score,
-            'skill_match_percentage': skill_percentage,
-            'experience_score': min(years_experience * 10, 100),
-            'education_score': 75,
-            'ai_reasoning': reasoning,
-            'parsed_resume': self._parse_resume_basic(resume_text),
-            'is_shortlisted': final_score >= 70
+    def screen_resume_text(self, resume_text: str, job_description: str, parsed_job_description: Optional[dict] = None, skill_graph: Optional[dict] = None, min_resume_score: Optional[int] = None) -> Dict[str, Any]:
+        from app.services.resume_screening import resume_screening_graph
+        from app.services.resume_screening.graph import State as ResumeScreeningState
+        jd_struct = parsed_job_description if parsed_job_description else {"raw_job_description": job_description}
+        state = ResumeScreeningState(parsed_jd=jd_struct, resume=resume_text)
+        result_state = resume_screening_graph.invoke(state)
+        if isinstance(result_state, dict):
+            result_state = ResumeScreeningState(**result_state)
+        result = result_state.screening_result
+        # Ensure all expected fields are present
+        default_fields = {
+            "resume_score": None,
+            "skill_match_percentage": None,
+            "experience_score": None,
+            "education_score": None,
+            "ai_reasoning": None,
+            "is_shortlisted": False,
+            "shortlist_reason": None,
         }
+        output = result.model_dump() if hasattr(result, "model_dump") else dict(result) if result else {}
+        for k, v in default_fields.items():
+            output.setdefault(k, v)
+        output["error"] = result_state.error
+        return output
 
     def _parse_resume_basic(self, resume_text: str) -> Dict[str, Any]:
         return {

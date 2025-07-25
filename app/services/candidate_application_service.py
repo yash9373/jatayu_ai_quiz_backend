@@ -67,18 +67,38 @@ class CandidateApplicationService:
         # Remove fields not in CandidateApplication model
         app_data.pop("email", None)
         app_data.pop("name", None)
+        # Calculate resume_score if not present
+        resume_score = ai_result.get("match_score")
+        if resume_score is None:
+            # Use weighted sum from prompt
+            weights = {
+                "experience_alignment_score": 0.4,
+                "skills_match_score": 0.2,
+                "responsibility_match_score": 0.1,
+                "preferred_skills_score": 0.05,
+                "certifications_score": 0.05,
+                "soft_skills_score": 0.05,
+                "project_impact_score": 0.1,
+                "overall_fit_score": 0.05,
+            }
+            total = 0.0
+            for k, w in weights.items():
+                score = ai_result.get(k)
+                if score is not None:
+                    total += score * w
+            resume_score = int(round(total))
         app_data.update({
             "resume_text": resume_text,
             "parsed_resume": ai_result.get("parsed_resume"),
-            "resume_score": ai_result.get("resume_score"),
-            "skill_match_percentage": ai_result.get("skill_match_percentage"),
-            "experience_score": ai_result.get("experience_score"),
-            "education_score": ai_result.get("education_score"),
-            "ai_reasoning": ai_result.get("ai_reasoning"),
+            "resume_score": resume_score,
+            "skill_match_percentage": ai_result.get("skills_match_score"),
+            "experience_score": ai_result.get("experience_alignment_score"),
+            "education_score": None,  # No direct mapping, set to None or map if available
+            "ai_reasoning": ai_result.get("reason"),
             "is_shortlisted": ai_result.get("is_shortlisted"),
             "applied_at": datetime.utcnow(),
             "updated_at": datetime.utcnow(),
-            "screening_completed_at": datetime.utcnow() if ai_result.get("resume_score") is not None else None
+            "screening_completed_at": datetime.utcnow() if resume_score is not None else None
         })
         # Ensure parsed_resume is a string (JSON) if it's a dict
         if isinstance(app_data.get("parsed_resume"), dict):

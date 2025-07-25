@@ -194,7 +194,6 @@ def get_llm():
     """Get LLM instance lazily to avoid initialization issues during import."""
     return ChatOpenAI(
         model="gpt-4o",
-        temperature=0.1,
     )
 
 
