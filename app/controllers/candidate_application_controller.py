@@ -103,7 +103,7 @@ async def get_single_application(
     
     # Check if the application belongs to a test created by the current user
     from app.repositories.test_repo import get_test_by_id
-    test = await get_test_by_id(db, application["test_id"])
+    test = await get_test_by_id(db, application.test_id)
     if not test or test.created_by != current_user.user_id:
         raise HTTPException(status_code=403, detail="You can only view applications for tests you created")
     

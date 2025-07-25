@@ -158,7 +158,8 @@ class CandidateApplicationService:
             applied_at=application.applied_at,
             updated_at=application.updated_at,
             candidate_name=application.user.name,
-            candidate_email=application.user.email
+            candidate_email=application.user.email,
+            screening_status=application.screening_status
         )
 
     async def shortlist_bulk_candidates(self, db: AsyncSession, test_id: int, min_score: int):

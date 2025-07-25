@@ -35,6 +35,7 @@ class CandidateApplicationResponse(CandidateApplicationBase):
     application_id: int
     candidate_name: Optional[str] = None
     candidate_email: Optional[str] = None
+    screening_status: Optional[str] = "pending"
     class Config:
         from_attributes = True
         orm_mode = True
@@ -62,6 +63,7 @@ class CandidateApplicationUpdate(BaseModel):
     notified_at: Optional[datetime] = None
     applied_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    screening_status: Optional[str] = "pending"
 
 class CandidateApplicationSummaryResponse(BaseModel):
     """Minimal response with only essential candidate information"""
