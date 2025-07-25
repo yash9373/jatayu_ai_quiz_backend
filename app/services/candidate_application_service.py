@@ -52,6 +52,8 @@ class CandidateApplicationService:
                 "is_shortlisted": app.is_shortlisted,
                 "candidate_name": app.user.name if app.user else None,
                 "candidate_email": app.user.email if app.user else None,
+                "screening_status": app.screening_status,
+                
             }
             response_list.append(CandidateApplicationSummaryResponse(**app_dict))
         return response_list

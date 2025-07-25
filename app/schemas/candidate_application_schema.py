@@ -72,6 +72,7 @@ class CandidateApplicationSummaryResponse(BaseModel):
     resume_link: str
     resume_score: Optional[int] = None
     is_shortlisted: Optional[bool] = None
+    screening_status: Optional[str] = "pending"
     
     class Config:
         from_attributes = True
