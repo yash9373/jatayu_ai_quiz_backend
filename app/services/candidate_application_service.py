@@ -21,6 +21,7 @@ from app.models.user import User, UserRole
 from app.core.security import get_password_hash
 import random
 import string
+from app.services.notification_service import NotificationService
 
 class CandidateApplicationService:
     async def process_bulk_applications(self, db: AsyncSession, bulk_data: CandidateApplicationBulkCreate) -> CandidateApplicationBulkResponse:
@@ -64,14 +65,21 @@ class CandidateApplicationService:
 
     async def process_single_application(self, db: AsyncSession, data: CandidateApplicationCreate) -> Dict[str, Any]:
         # Check or create user by email
-        user = await get_user_by_email(db, data.email)
+        sanitized_email = data.email.replace("mailto:", "")
+        print(f"[DEBUG] Using sanitized email: {sanitized_email}")
+        user = await get_user_by_email(db, sanitized_email)
         generated_password = None
         if not user:
             generated_password = ''.join(random.choices(string.ascii_letters + string.digits + string.punctuation, k=12))
             hashed_password = get_password_hash(generated_password)
-            name = data.name or data.email.split('@')[0]
-            new_user = await create_user(db, name=name, email=data.email, hashed_password=hashed_password, role=UserRole.candidate)
+            name = data.name or sanitized_email.split('@')[0]
+            new_user = await create_user(db, name=name, email=sanitized_email, hashed_password=hashed_password, role=UserRole.candidate)
             user_id = new_user.user_id
+            NotificationService().send_account_creation_email(
+                to_email=sanitized_email,
+                username=sanitized_email,
+                password=generated_password
+            )
         else:
             user_id = user.user_id
         # Check for duplicate
@@ -128,8 +136,8 @@ class CandidateApplicationService:
             "applied_at": application.applied_at,
             "updated_at": application.updated_at,
             "screening_status": application.screening_status if hasattr(application, "screening_status") else "pending",
-            "candidate_name": data.name or data.email.split('@')[0],
-            "candidate_email": data.email
+            "candidate_name": data.name or sanitized_email.split('@')[0],
+            "candidate_email": sanitized_email
         }
         if generated_password:
             response_dict["generated_password"] = generated_password

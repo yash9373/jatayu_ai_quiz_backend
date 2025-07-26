@@ -9,205 +9,42 @@ from datetime import datetime
 from app.models.user import User
 from app.models.test import Test
 
-logger = logging.getLogger(__name__)
+# NotificationService class for sending emails
+import sendgrid
+import os
+import ssl
+from sendgrid.helpers.mail import Mail, Email, To, Content
+
+ssl._create_default_https_context = ssl._create_unverified_context
 
 class NotificationService:
-    """Service for handling notifications (email/SMS)"""
-    
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
-    
-    async def send_test_created_notification(self, test: Test, creator: User) -> None:
-        """Send notification when test is created"""
-        message = f"""
-        📧 EMAIL NOTIFICATION (Mock)
-        
-        To: {creator.email}
-        Subject: Test Created Successfully - {test.test_name}
-        
-        Hi {creator.name},
-        
-        Your test "{test.test_name}" has been created successfully.
-        
-        Test Details:
-        - Test ID: {test.test_id}
-        - Status: {test.status}
-        - Created: {test.created_at}
-        
-        Next Steps:
-        1. Review test configuration
-        2. Schedule the test
-        3. Publish when ready
-        
-        Best regards,
-        Jatayu Team
-        """
-        
-        logger.info(f"[NOTIFICATION] Test created notification for {creator.email}")
-        print(message)
-    
-    async def send_test_scheduled_notification(self, test: Test, creator: User) -> None:
-        """Send notification when test is scheduled"""
-        message = f"""
-        📧 EMAIL NOTIFICATION (Mock)
-        
-        To: {creator.email}
-        Subject: Test Scheduled - {test.test_name}
-        
-        Hi {creator.name},
-        
-        Your test "{test.test_name}" has been scheduled successfully.
-        
-        Schedule Details:
-        - Test ID: {test.test_id}
-        - Scheduled for: {test.scheduled_at}
-        - Application Deadline: {test.application_deadline}
-        - Assessment Deadline: {test.assessment_deadline}
-        
-        The test will be automatically published at the scheduled time.
-        
-        Best regards,
-        Jatayu Team
-        """
-        
-        logger.info(f"[NOTIFICATION] Test scheduled notification for {creator.email}")
-        print(message)
-    
-    async def send_test_published_notification(self, test: Test, creator: User) -> None:
-        """Send notification when test is published"""
-        message = f"""
-        📧 EMAIL NOTIFICATION (Mock)
-        
-        To: {creator.email}
-        Subject: Test Published - {test.test_name}
-        
-        Hi {creator.name},
-        
-        Your test "{test.test_name}" is now live and available to candidates!
-        
-        Test Details:
-        - Test ID: {test.test_id}
-        - Status: Published
-        - Published: {datetime.now()}
-        - Application Deadline: {test.application_deadline}
-        
-        Candidates can now apply and take the assessment.
-        
-        Best regards,
-        Jatayu Team
-        """
-        
-        logger.info(f"[NOTIFICATION] Test published notification for {creator.email}")
-        print(message)
-    
-    async def send_test_unpublished_notification(self, test: Test, creator: User) -> None:
-        """Send notification when test is unpublished"""
-        message = f"""
-        📧 EMAIL NOTIFICATION (Mock)
-        
-        To: {creator.email}
-        Subject: Test Unpublished - {test.test_name}
-        
-        Hi {creator.name},
-        
-        Your test "{test.test_name}" has been unpublished and is no longer available to candidates.
-        
-        Test Details:
-        - Test ID: {test.test_id}
-        - Status: Paused
-        - Unpublished: {datetime.now()}
-        
-        You can republish the test anytime from your dashboard.
-        
-        Best regards,
-        Jatayu Team
-        """
-        
-        logger.info(f"[NOTIFICATION] Test unpublished notification for {creator.email}")
-        print(message)
-    
-    async def send_candidate_notification(self, candidates: List[User], test: Test) -> None:
-        """Send notification to candidates about new test"""
-        for candidate in candidates:
-            message = f"""
-            📧 EMAIL NOTIFICATION (Mock)
-            
-            To: {candidate.email}
-            Subject: New Assessment Available - {test.test_name}
-            
-            Hi {candidate.name},
-            
-            A new assessment "{test.test_name}" is now available for you to take.
-            
-            Test Details:
-            - Test ID: {test.test_id}
-            - Time Limit: {test.time_limit_minutes} minutes
-            - Total Questions: {test.total_questions}
-            - Total Marks: {test.total_marks}
-            - Application Deadline: {test.application_deadline}
-            
-            Please log in to your dashboard to start the assessment.
-            
-            Best regards,
-            Jatayu Team
-            """
-            
-            logger.info(f"[NOTIFICATION] Candidate notification sent to {candidate.email}")
-            print(message)
-    
-    async def send_ai_processing_notification(self, test: Test, creator: User, status: str) -> None:
-        """Send notification about AI processing status"""
-        message = f"""
-        📧 EMAIL NOTIFICATION (Mock)
-        
-        To: {creator.email}
-        Subject: AI Processing {status} - {test.test_name}
-        
-        Hi {creator.name},
-        
-        AI processing for your test "{test.test_name}" is {status}.
-        
-        Process Details:
-        - Test ID: {test.test_id}
-        - Status: {status}
-        - Time: {datetime.now()}
-        
-        {"Your job description has been parsed and skill graph generated successfully!" if status == "completed" else "Processing your job description and generating skill graph..."}
-        
-        Best regards,
-        Jatayu Team
-        """
-        
-        logger.info(f"[NOTIFICATION] AI processing {status} notification for {creator.email}")
-        print(message)
-    
-    async def notify_test_deleted(self, test_name: str, test_id: int, recruiter_email: str) -> None:
-        """Send notification when test is deleted"""
-        message = f"""
-        📧 EMAIL NOTIFICATION (Mock)
-        
-        To: {recruiter_email}
-        Subject: Test Deleted - {test_name}
-        
-        Your test "{test_name}" (ID: {test_id}) has been deleted successfully.
-        
-        This action cannot be undone.
-        
-        Best regards,
-        Jatayu Team
-        """
-        
-        logger.info(f"[NOTIFICATION] Test deleted notification for {recruiter_email}")
-        print(message)
-    
-    @staticmethod
-    async def notify_candidate_shortlisted(db, application):
-        # Mock notification for candidate shortlisting
-        print(f"[NOTIFICATION] Candidate {application.user.email if application.user else 'Unknown'} shortlisted for test {application.test_id} (score: {application.resume_score})")
+        api_key = os.environ.get("SENDGRID_API_KEY")
+        self.sg = sendgrid.SendGridAPIClient(api_key=api_key)
+        self.from_email = Email("kolheyashodip8@gmail.com")  # Use your verified sender email
 
-# Singleton instance
-notification_service = NotificationService()
+    def send_email(self, to_email: str, subject: str, html_content: str) -> int:
+        to = To(to_email)
+        content = Content("text/html", html_content)
+        mail = Mail(self.from_email, to, subject, content)
+        mail_json = mail.get()
+        response = self.sg.client.mail.send.post(request_body=mail_json)
+        # Optionally log or handle response
+        return response.status_code
 
-def get_notification_service() -> NotificationService:
-    """Get notification service instance"""
-    return notification_service
+    def send_account_creation_email(self, to_email: str, username: str, password: str) -> int:
+        subject = "Your Jatayu Account Created"
+        html_content = f"""
+            <p>Hello,</p>
+            <p>Your account has been created.</p>
+            <p><b>Username:</b> {username}<br><b>Password:</b> {password}</p>
+            <p>Please change your password after first login.</p>
+        """
+        return self.send_email(to_email, subject, html_content)
+
+    def send_shortlisting_status_email(self, to_email: str, status: str, extra_info: str = None) -> int:
+        subject = "Your Application Status Update"
+        html_content = f"<p>Hello,</p><p>Your application status: <b>{status}</b>.</p>"
+        if extra_info:
+            html_content += f"<p>{extra_info}</p>"
+        return self.send_email(to_email, subject, html_content)
