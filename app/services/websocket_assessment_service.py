@@ -55,7 +55,7 @@ class AssessmentGraphService:
         assessment_id: int,
         user_id: int,
         db: AsyncSession
-    ) -> bool:
+    ):
         """
         Initialize MCQ generation graph for an assessment session
 
@@ -80,7 +80,8 @@ class AssessmentGraphService:
             if thread_id in self.initialized_threads:
                 logger.info(
                     f"Thread {thread_id} already initialized, checking for existing state")
-                return await self._check_and_recover_existing_state(thread_id, connection_id)
+                recoverd_state = await self._check_and_recover_existing_state(thread_id, connection_id)
+                return recoverd_state
 
             graph = await self._get_graph()
 
@@ -94,7 +95,7 @@ class AssessmentGraphService:
                 logger.info(
                     f"Found existing graph state for thread {thread_id}, recovering")
                 self.initialized_threads[thread_id] = True
-                return True
+                return existing_state.values  # type:ignore
 
             # No existing state, initialize new assessment
             logger.info(
@@ -108,14 +109,15 @@ class AssessmentGraphService:
             if not candidate_application:
                 logger.error(
                     f"Candidate application not found for user {user_id}")
-                return False
+                return None
 
             # Prepare initial state data
             parsed_jd = JobDescriptionFields.model_validate_json(
                 test.parsed_job_description)  # type: ignore
             parsed_resume = ResumeFields.model_validate_json(
                 candidate_application.parsed_resume)  # type: ignore
-            skill_graph = SkillGraph.model_validate_json(test.skill_graph)  # type: ignore
+            skill_graph = SkillGraph.model_validate_json(
+                test.skill_graph)  # type: ignore
 
             # Create initial agent state
             agent_state = AgentState(
@@ -132,14 +134,14 @@ class AssessmentGraphService:
 
             logger.info(
                 f"Successfully initialized assessment graph for thread {thread_id}")
-            return True
+            return state  # type: ignore
 
         except Exception as e:
             logger.error(
                 f"Error initializing assessment graph: {str(e)}", exc_info=True)
-            return False
+            return None
 
-    async def _check_and_recover_existing_state(self, thread_id: str, connection_id: str) -> bool:
+    async def _check_and_recover_existing_state(self, thread_id: str, connection_id: str) -> AgentState | None:
         """
         Check if existing state is valid and recoverable
 
@@ -159,30 +161,18 @@ class AssessmentGraphService:
             state = await graph.aget_state(config)
             if state.values:
                 logger.info(f"Recovered existing state for thread {thread_id}")
-                return True
+                return state.values  # type:ignore
             else:
                 logger.warning(
                     f"No recoverable state found for thread {thread_id}")
-                return False
+                return None
 
         except Exception as e:
             logger.error(
                 f"Error recovering state for thread {thread_id}: {str(e)}")
-            return False
+            return None
 
     async def generate_question(self, connection_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Generate next question using MCQ graph
-
-        Uses Command(resume=...) to continue the graph execution without 
-        reinitializing the state.
-
-        Args:
-            connection_id: WebSocket connection identifier
-
-        Returns:
-            Dict containing question data or None if generation failed
-        """
         try:
             # Get thread_id from connection manager
             from app.websocket.connection_manager import connection_manager
@@ -288,26 +278,24 @@ class AssessmentGraphService:
                 }
             })
 
-            # Process the answer
             result = await graph.ainvoke(command, config=config)
 
-            # Get updated state for response and progress
             updated_state = await graph.aget_state(config)
-            responses = updated_state.values.get("candidate_response", {})
 
-            # Calculate progress
-            total_questions = len(generated_questions)
-            answered_questions = len(responses)
-            progress_percentage = (
-                answered_questions / total_questions * 100) if total_questions > 0 else 0
+            node_queue = updated_state.values.get("node_queue", [])
+            processed_nodes = updated_state.values.get("processed_nodes", [])
+
+            total_nodes = len(node_queue)
+            completed_nodes = len(processed_nodes)
+            progress = (completed_nodes / total_nodes) * 100
 
             return {
                 "question_id": question_id,
                 "feedback": self._generate_feedback(question_id, selected_option, generated_questions),
                 "progress": {
-                    "answered": answered_questions,
-                    "total": total_questions,
-                    "percentage_complete": progress_percentage
+                    "completed_nodes": completed_nodes,
+                    "total_nodes": total_nodes,
+                    "percentage_complete": progress
                 },
                 "thread_id": thread_id
             }
@@ -370,28 +358,57 @@ class AssessmentGraphService:
                 configurable={"thread_id": thread_id}
             )
 
-            state = await graph.aget_state(config)
-            if not state.values:
-                return None
+            updated_state = await graph.aget_state(config)
 
-            generated_questions = state.values.get("generated_questions", {})
-            responses = state.values.get("candidate_response", {})
+            node_queue = updated_state.values.get("node_queue", [])
+            processed_nodes = updated_state.values.get("processed_nodes", [])
 
-            total_questions = len(generated_questions)
-            answered_questions = len(responses)
-            progress_percentage = (
-                answered_questions / total_questions * 100) if total_questions > 0 else 0
+            total_nodes = len(node_queue)
+            completed_nodes = len(processed_nodes)
+            progress = (completed_nodes / total_nodes) * 100
 
             return {
-                "total_questions": total_questions,
-                "answered_questions": answered_questions,
-                "percentage_complete": progress_percentage,
+                "total_nodes": total_nodes,
+                "processed_nodes": processed_nodes,
+                "percentage_complete": progress,
                 "thread_id": thread_id
             }
 
         except Exception as e:
             logger.error(
                 f"Error getting progress for connection {connection_id}: {str(e)}")
+            return None
+
+    async def get_assessment_state(self, thread_id: str, db: AsyncSession) -> Optional[Dict[str, Any]]:
+        """
+        Get current assessment state including questions and responses
+
+        Args:
+            connection_id: WebSocket connection identifier
+            db: Database session
+
+        Returns:
+            Dict containing current state or None if error
+        """
+        try:
+
+            graph = await self._get_graph()
+            config = RunnableConfig(
+                configurable={"thread_id": thread_id}
+            )
+
+            state = await graph.aget_state(config)
+            if not state.values:
+                logger.error(f"No state found for thread {thread_id}")
+                return None
+
+            return {
+                "state": state.values,
+            }
+
+        except Exception as e:
+            logger.error(
+                f"Error getting assessment state for thread {thread_id}: {str(e)}")
             return None
 
     async def finalize_assessment(self, connection_id: str, db: AsyncSession) -> Optional[Dict[str, Any]]:

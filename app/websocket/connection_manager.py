@@ -1,14 +1,12 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set
-from fastapi import WebSocket, WebSocketDisconnect, status
+from datetime import datetime
+from typing import Dict,  Optional, Set
+from fastapi import WebSocket
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import decode_token
-from app.db.database import get_db
-from app.models.user import User
-from app.models.test import Test, TestStatus
+from app.models.test import TestStatus
 from app.repositories import user_repo
 from app.repositories.test_repo import TestRepository
 from app.repositories.assessment_repo import AssessmentRepository
@@ -18,39 +16,18 @@ logger = logging.getLogger(__name__)
 
 
 class ConnectionState:
-    """
-    Represents the state of a WebSocket connection
-
-    This class encapsulates all the state information for a single WebSocket connection,
-    including user identity, assessment progress, and connection metadata.
-
-    Attributes:
-        websocket: The actual WebSocket connection object
-        user_id: Authenticated user identifier  
-        test_id: ID of the test being taken (None if not in assessment)
-        assessment_id: Database ID of the assessment instance (None if not started)
-        thread_id: Graph thread ID for MCQ generation (same as assessment_id for persistence)
-        connected_at: Timestamp when connection was established
-        last_activity: Timestamp of last message/activity (used for cleanup)
-        assessment_started_at: When the assessment session began
-        assessment_state: Dictionary containing current progress and state data
-        is_authenticated: Whether the connection has been authenticated
-        is_in_assessment: Whether user is actively taking an assessment
-        graph_initialized: Whether the MCQ generation graph has been initialized
-    """
 
     def __init__(self, websocket: WebSocket, user_id: int, test_id: Optional[int] = None):
         self.websocket = websocket
         self.user_id = user_id
         self.test_id = test_id
-        self.connected_at = datetime.utcnow()
-        self.last_activity = datetime.utcnow()
+        self.connected_at = datetime.now()
+        self.last_activity = datetime.now()
         self.assessment_started_at: Optional[datetime] = None
-        # Actual assessment instance ID from database
         self.assessment_id: Optional[int] = None
+
         # Thread ID for graph state persistence (same as assessment_id)
         self.thread_id: Optional[str] = None
-        self.assessment_state: Dict = {}  # Current assessment state/progress
         self.is_authenticated = False
         self.is_in_assessment = False
         self.graph_initialized = False
@@ -103,14 +80,15 @@ class WebSocketConnectionManager:
     It handles authentication, connection lifecycle, state management, and provides
     utilities for message routing and broadcast capabilities.
 
-    SINGLE CONNECTION POLICY:
-    This system enforces one connection per user to maintain assessment integrity.
-    When a user attempts to connect while having an existing connection, the old
-    connection is automatically disconnected before establishing the new one.
+    CONNECTION IDENTITY STRATEGY:
+    This system uses a consistent connection_id format throughout the connection lifecycle:
+    - Format: "{user_id}_{test_id}" for assessment connections
+    - Format: "{user_id}_general" for general connections without specific test
+    - This enables robust state recovery across reconnections for the same user/test combination
 
     Key responsibilities:
     - Authenticate and establish secure connections
-    - Enforce single connection per user policy
+    - Enforce connection consistency per user/test combination
     - Track connection state and user sessions  
     - Manage assessment session lifecycle
     - Enable message routing (personal, assessment-wide)
@@ -119,17 +97,16 @@ class WebSocketConnectionManager:
 
     Data Structures:
     - active_connections: Maps connection_id -> ConnectionState
-    - user_connections: Maps user_id -> connection_id (single connection per candidate)
-    - assessment_sessions: Maps test_id -> Set[connection_ids] (assessment participants)
+    - user_connections: Maps user_id -> connection_id (current active connection per user)    - assessment_sessions: Maps test_id -> Set[connection_ids] (assessment participants)
     """
 
     def __init__(self):
-        # Active connections indexed by connection_id (user_id + connection timestamp)
-        # Format: "{user_id}_{timestamp}" -> ConnectionState
+        # Active connections indexed by connection_id
+        # Format: "{user_id}_{test_id}" -> ConnectionState
         self.active_connections: Dict[str, ConnectionState] = {}
 
-        # Single connection per user - maps user_id to connection_id
-        # Enforces one connection per candidate to prevent multiple sessions
+        # Current active connection per user - maps user_id to connection_id
+        # Allows tracking the most recent connection for each user
         self.user_connections: Dict[int, str] = {}
 
         # Assessment sessions - maps test_id to active connection_ids
@@ -137,9 +114,8 @@ class WebSocketConnectionManager:
         self.assessment_sessions: Dict[int, Set[str]] = {}
 
         # Connection cleanup interval (in seconds)
-        self.cleanup_interval = 300  # 5 minutes
-
-        # Maximum idle time before connection cleanup (in seconds)
+        # 5 minutes        # Maximum idle time before connection cleanup (in seconds)
+        self.cleanup_interval = 300
         self.max_idle_time = 1800  # 30 minutes
 
         # Start cleanup task
@@ -166,76 +142,69 @@ class WebSocketConnectionManager:
         """
         try:
             payload = decode_token(token)
+            print(f"Decoded token payload: {payload}")
             if not payload:
-                logger.warning(
+                print(
                     "Invalid token provided for WebSocket authentication")
                 return None
 
+            # Check for user_id first (new token format)
             user_id = payload.get("user_id")
-            if not user_id:
-                logger.warning("Token missing user_id claim")
-                return None
-
-            # TODO: Add additional validation like checking if user exists and is active
-            # This could involve a database query to validate the user
-
-            return user_id
+            if user_id:
+                print(f"found user_id in token payload: {user_id}")
+                return user_id
+            return None
 
         except Exception as e:
             logger.error(f"Error during WebSocket authentication: {str(e)}")
             return None
 
-    async def connect(self, websocket: WebSocket, user_id: int, test_id: Optional[int] = None) -> str:
-        """
-        Accept WebSocket connection and register it
+    async def connect(self, websocket: WebSocket, user_id: int, test_id: Optional[int] = None, db: Optional[AsyncSession] = None) -> str:
+        # Generate connection ID using user_id and test_id
+        if not test_id:
+            logger.error(f"Cannot Start Assessment without the test_id")
+        if not user_id:
+            logger.error(f"Cannot Start the assessment without user_id")
+        connection_id = f"{user_id}_{test_id}"
 
-        This method completes the connection establishment process after authentication.
-        It enforces single connection per user by disconnecting any existing connection
-        before establishing the new one.
-
-        Args:
-            websocket: The authenticated WebSocket connection
-            user_id: ID of the authenticated user
-            test_id: Optional test ID if joining a specific assessment
-
-        Returns:
-            connection_id: Unique identifier for tracking this connection
-
-        Connection ID Format:
-            "{user_id}_{timestamp}" - ensures uniqueness across connections
-
-        SINGLE CONNECTION POLICY:
-            If the user already has an active connection, it will be disconnected
-            before establishing the new connection. This prevents multiple sessions
-            and ensures assessment integrity.
-        """
-        # Check for existing connection and disconnect it
-        if user_id in self.user_connections:
-            existing_connection_id = self.user_connections[user_id]
+        # Check for existing connection with same connection_id and disconnect it
+        if connection_id in self.active_connections:
             logger.info(
-                f"Disconnecting existing connection {existing_connection_id} for user {user_id}")
-            await self.disconnect(existing_connection_id)
+                f"Disconnecting existing connection {connection_id} for user {user_id}")
+            await self.disconnect(connection_id)
 
         await websocket.accept()
 
-        # Generate unique connection ID using user_id and timestamp
-        connection_id = f"{user_id}_{datetime.utcnow().timestamp()}"
-
         # Create connection state object
         connection_state = ConnectionState(websocket, user_id, test_id)
+
         connection_state.is_authenticated = True
 
         # Store in primary connection registry
         self.active_connections[connection_id] = connection_state
 
-        # Store single connection per user
+        # Store single connection per user (update to allow multiple tests per user)
         self.user_connections[user_id] = connection_id
 
-        # If joining an assessment, add to assessment session tracking
+        # If joining an assessment, add to assessment session tracking and check for existing assessment
         if test_id:
             if test_id not in self.assessment_sessions:
                 self.assessment_sessions[test_id] = set()
             self.assessment_sessions[test_id].add(connection_id)
+
+            # Auto-recover existing assessment session if available
+            if db is not None:
+                existing_assessment_id = await self.check_existing_assessment(user_id, test_id, db)
+                if existing_assessment_id:
+                    logger.info(
+                        f"Auto-recovering assessment {existing_assessment_id} for reconnection {connection_id}")
+                    recovery_success = await self.recover_assessment_session(connection_id, existing_assessment_id, db)
+                    if recovery_success:
+                        logger.info(
+                            f"Successfully auto-recovered assessment state for {connection_id}")
+                    else:
+                        logger.warning(
+                            f"Failed to auto-recover assessment state for {connection_id}")
 
         logger.info(
             f"WebSocket connection established: {connection_id} (user: {user_id}, test: {test_id})")
@@ -272,9 +241,9 @@ class WebSocketConnectionManager:
             pass  # Connection might already be closed
 
         # Remove from active connections registry
+        # Clean up user connection mapping
         del self.active_connections[connection_id]
-
-        # Clean up user connection mapping (single connection per user)
+        # Only remove if this connection_id matches the current active connection for the user
         if user_id in self.user_connections and self.user_connections[user_id] == connection_id:
             del self.user_connections[user_id]
 
@@ -327,21 +296,6 @@ class WebSocketConnectionManager:
         if await self.send_personal_message(connection_id, message):
             return 1
         return 0
-
-    async def broadcast_to_assessment(self, test_id: int, message: dict, exclude_connection: Optional[str] = None):
-        """Broadcast a message to all participants in an assessment"""
-        if test_id not in self.assessment_sessions:
-            return 0
-
-        connection_ids = list(self.assessment_sessions[test_id])
-        successful_sends = 0
-
-        for connection_id in connection_ids:
-            if connection_id != exclude_connection:
-                if await self.send_personal_message(connection_id, message):
-                    successful_sends += 1
-
-        return successful_sends
 
     def get_connection_info(self, connection_id: str) -> Optional[Dict]:
         """Get information about a specific connection"""
@@ -414,6 +368,7 @@ class WebSocketConnectionManager:
             thread_id if connection exists and has assessment, None otherwise
         """
         if connection_id not in self.active_connections:
+            logger.info("Connection not found for thread ID retrieval")
             return None
 
         connection_state = self.active_connections[connection_id]
@@ -434,6 +389,7 @@ class WebSocketConnectionManager:
         Validate if a user can access a specific assessment
         TODO: Implement proper authorization logic based on your business rules
         """
+        print("Validating assessment access...")
         if connection_id not in self.active_connections:
             return False
 
@@ -447,23 +403,24 @@ class WebSocketConnectionManager:
             # Check if test exists and is in valid state
             test = await test_repo.get_test_by_id(test_id)
             if not test:
-                logger.warning(f"Test {test_id} not found")
+                print(f"Test {test_id} not found")
                 return False
 
             # Check test status
-            if test.status not in [TestStatus.PUBLISHED, TestStatus.SCHEDULED]:
-                logger.warning(
+            if test.status not in [TestStatus.LIVE, TestStatus.SCHEDULED]:
+                print(
                     f"Test {test_id} is not available for assessment (status: {test.status})")
                 return False
 
             # TODO: Add test scheduler validation
             # Check if the test is within valid time window
-            now = datetime.utcnow()
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
 
             # Check if test has started (if scheduled)
             scheduled_at = getattr(test, 'scheduled_at', None)
             if scheduled_at is not None and scheduled_at > now:
-                logger.warning(f"Test {test_id} has not started yet")
+                print(f"Test {test_id} has not started yet")
                 return False
 
             # Check if assessment deadline has passed
@@ -486,34 +443,11 @@ class WebSocketConnectionManager:
             logger.error(f"Error validating assessment access: {str(e)}")
             return False
 
-    async def start_assessment_session(self, connection_id: str, test_id: int, db: AsyncSession) -> Optional[int]:
-        """
-        Start an assessment session for a connection by creating an assessment instance
+    async def start_assessment_session(self, connection_id: str, test_id: int, db: AsyncSession) -> tuple[Optional[int], Optional[str]]:
 
-        This method handles the transition from a general connection to an active
-        assessment session. It creates a database record for tracking progress and
-        updates the connection state accordingly.
-
-        Reconnection Support:
-        The method first checks for existing assessment instances that can be recovered.
-        This enables seamless reconnection if a user's connection drops during an assessment.
-
-        Args:
-            connection_id: WebSocket connection identifier
-            test_id: Test blueprint ID (defines questions, time limits, etc.)
-            db: Database session for creating assessment records
-
-        Returns:
-            assessment_id: Database ID of the assessment instance if successful, None otherwise
-
-        Assessment Instance:
-            Each assessment attempt gets a unique assessment_id in the database.
-            This tracks the user's specific attempt at a test blueprint, including
-            progress, answers, start time, and completion status.
-        """
         if connection_id not in self.active_connections:
             logger.error(f"Connection {connection_id} not found")
-            return None
+            return None, None
 
         connection_state = self.active_connections[connection_id]
         user_id = connection_state.user_id
@@ -523,14 +457,14 @@ class WebSocketConnectionManager:
             existing_assessment_id = await self.check_existing_assessment(user_id, test_id, db)
 
             if existing_assessment_id:
-                # Recover existing assessment
+                # Recover existing assessment with same connection_id
                 recovery_success = await self.recover_assessment_session(
                     connection_id, existing_assessment_id, db
                 )
                 if recovery_success:
                     logger.info(
                         f"Recovered existing assessment {existing_assessment_id} for connection {connection_id}")
-                    return existing_assessment_id
+                    return existing_assessment_id, connection_id
 
             # Create new assessment instance if no existing one found
             # Fetch application_id for this user and test
@@ -543,12 +477,12 @@ class WebSocketConnectionManager:
                 # For now, we'll use None and let the assessment creation handle it
                 application_id = None
             else:
-                application_id = getattr(application, 'application_id')
+                application_id = application.application_id
 
             # Create assessment instance in database
             assessment_repo = AssessmentRepository(db)
             assessment_id = await assessment_repo.create_assessment_instance(
-                application_id=application_id,  # Use None if no application
+                application_id=application_id,  # type:ignore
                 user_id=user_id,
                 test_id=test_id
             )
@@ -556,23 +490,18 @@ class WebSocketConnectionManager:
             if not assessment_id:
                 logger.error(
                     f"Failed to create assessment instance for user {user_id}, test {test_id}")
-                return None
+                return None, None
 
             # Update connection state with assessment instance
             connection_state.start_assessment(test_id, assessment_id)
 
-            # Add to assessment session tracking
-            if test_id not in self.assessment_sessions:
-                self.assessment_sessions[test_id] = set()
-            self.assessment_sessions[test_id].add(connection_id)
-
             logger.info(
                 f"Assessment instance {assessment_id} started for connection {connection_id} (user: {user_id}, test: {test_id})")
-            return assessment_id
+            return assessment_id, connection_id
 
         except Exception as e:
             logger.error(f"Error starting assessment session: {str(e)}")
-            return None
+            return None, None
 
     async def end_assessment_session(self, connection_id: str):
         """End an assessment session for a connection"""
@@ -664,9 +593,8 @@ class WebSocketConnectionManager:
             test_id = getattr(assessment, 'test_id')
 
             # Update connection state
-            connection_state.start_assessment(test_id, assessment_id)
-
             # Add to assessment session tracking
+            connection_state.start_assessment(test_id, assessment_id)
             if test_id not in self.assessment_sessions:
                 self.assessment_sessions[test_id] = set()
             self.assessment_sessions[test_id].add(connection_id)
@@ -727,6 +655,48 @@ class WebSocketConnectionManager:
             except Exception as e:
                 logger.error(f"Error in connection cleanup task: {str(e)}")
 
+    def has_active_assessment(self, connection_id: str) -> bool:
+        """
+        Check if a connection has an active assessment session
 
-# Global connection manager instance
+        Args:
+            connection_id: The connection identifier
+
+        Returns:
+            True if connection has active assessment, False otherwise
+        """
+        if connection_id not in self.active_connections:
+            return False
+
+        connection_state = self.active_connections[connection_id]
+        return connection_state.is_in_assessment and connection_state.assessment_id is not None
+
+    def get_assessment_status(self, connection_id: str) -> Optional[Dict]:
+        """
+        Get the assessment status for a connection
+
+        Args:
+            connection_id: The connection identifier
+
+        Returns:
+            Dictionary with assessment status information or None
+        """
+        if connection_id not in self.active_connections:
+            return None
+
+        connection_state = self.active_connections[connection_id]
+
+        if not connection_state.assessment_id:
+            return None
+
+        return {
+            "assessment_id": connection_state.assessment_id,
+            "test_id": connection_state.test_id,
+            "thread_id": connection_state.thread_id,
+            "is_in_assessment": connection_state.is_in_assessment,
+            "graph_initialized": connection_state.graph_initialized,
+            "assessment_started_at": connection_state.assessment_started_at.isoformat() if connection_state.assessment_started_at else None
+        }
+
+
 connection_manager = WebSocketConnectionManager()

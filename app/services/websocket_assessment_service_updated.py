@@ -184,6 +184,8 @@ class AssessmentGraphService:
         Returns:
             Dict containing question data or None if generation failed
         """
+        logger.info(
+            f"Generating question for connection {connection_id}")
         try:
             # Get thread_id from connection manager
             from app.websocket.connection_manager import connection_manager
@@ -223,7 +225,17 @@ class AssessmentGraphService:
                 return None
 
             # Get the latest question
-            latest_question_id = max(generated_questions.keys())
+            question_queue = updated_state.values.get('question_queue', [])
+            if not question_queue:
+                logger.warning(
+                    f"No question queue found for thread {thread_id}")
+                return None
+
+            latest_question_id = question_queue[0] if question_queue else None
+            if not latest_question_id or latest_question_id not in generated_questions:
+                logger.warning(
+                    f"No valid latest question found for thread {thread_id}")
+                return None
             latest_question = generated_questions[latest_question_id]
 
             return {
@@ -297,19 +309,10 @@ class AssessmentGraphService:
             responses = updated_state.values.get("candidate_response", {})
 
             # Calculate progress
-            total_questions = len(generated_questions)
-            answered_questions = len(responses)
-            progress_percentage = (
-                answered_questions / total_questions * 100) if total_questions > 0 else 0
 
             return {
                 "question_id": question_id,
                 "feedback": self._generate_feedback(question_id, selected_option, generated_questions),
-                "progress": {
-                    "answered": answered_questions,
-                    "total": total_questions,
-                    "percentage_complete": progress_percentage
-                },
                 "thread_id": thread_id
             }
 
