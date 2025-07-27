@@ -124,15 +124,15 @@ async def update_test(
     current_user: User = Depends(recruiter_required),
     db: AsyncSession = Depends(get_db)
 ):
-    """Update job description, resume_score_threshold, max_shortlisted_candidates, and auto_shortlist for a test (owner only, only in preparing). Skill graph will be updated if job description changes."""
+    """Update job description, resume_score_threshold, max_shortlisted_candidates, and auto_shortlist for a test (owner only, only in draft). Skill graph will be updated if job description changes."""
     existing_test = await test_service.get_test_by_id(test_id=test_id, db=db)
     if existing_test.created_by != current_user.user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only update your own tests"
         )
-    if existing_test.status != "preparing":
-        raise HTTPException(status_code=403, detail="Test/job description can only be updated in 'preparing' status.")
+    if existing_test.status != "draft":
+        raise HTTPException(status_code=403, detail="Test/job description can only be updated in 'draft' status.")
     return await test_service.update_test_job_description(
         test_id=test_id,
         test_data=test_data,

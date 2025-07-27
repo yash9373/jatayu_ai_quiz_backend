@@ -87,6 +87,9 @@ class TestService:
             test = await repo.get_test_by_id(test_id)
             if not test:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
+            # Only allow job description update in draft state
+            if test.status != TestStatus.DRAFT.value:
+                raise HTTPException(status_code=400, detail="Job description can only be updated in draft state.")
             # Check if job_description is being updated and actually changed
             job_desc_updated = False
             if "job_description" in test_data.dict(exclude_unset=True):
