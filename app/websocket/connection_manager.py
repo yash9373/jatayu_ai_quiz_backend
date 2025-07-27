@@ -26,7 +26,6 @@ class ConnectionState:
         self.assessment_started_at: Optional[datetime] = None
         self.assessment_id: Optional[int] = None
 
-        # Thread ID for graph state persistence (same as assessment_id)
         self.thread_id: Optional[str] = None
         self.is_authenticated = False
         self.is_in_assessment = False
@@ -553,6 +552,10 @@ class WebSocketConnectionManager:
                 # Check if assessment is in a recoverable state
                 status = getattr(existing_assessment, 'status', None)
                 assessment_id = getattr(existing_assessment, 'assessment_id')
+                if status in ['completed', 'abandoned', 'timed_out']:
+                    logger.info(
+                        f"Assessment {assessment_id} for user {user_id}, test {test_id} is not recoverable (status: {status})")
+                    return None
 
                 if status in ['started', 'in_progress']:
                     logger.info(

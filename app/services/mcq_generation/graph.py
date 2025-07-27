@@ -2,6 +2,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_openai import ChatOpenAI
 from app.services.mcq_generation.state import AgentState, GraphNodeState, Question, Response, UserResponse, SubmitResponsePayload, GenerateQuestionPayload, ExitPayload
+from app.services.jd_parsing.state import JobDescriptionFields
 from app.services.skill_graph_generation.state import SkillGraph, SkillNode
 from typing import List, Dict, Tuple, Optional
 from langgraph.graph import StateGraph, END, START
@@ -27,23 +28,59 @@ def get_llm():
     )
 
 
-# Configuration constants
-PASS_THRESHOLD = 0.6  # 60% pass threshold
+# Configuration 0.6  # 60% pass threshold
 
-# Questions per difficulty level
-QUESTIONS_PER_DIFFICULTY = {
+# Default questions per difficulty level (can be overridden in AgentState)
+DEFAULT_QUESTIONS_PER_DIFFICULTY = {
     "H": 5,  # High priority skills - 5 questions
     "M": 5,  # Medium priority skills - 5 questions
-    "L": 5   # Low priority skills - 5 questions
+    "L": 3   # Low priority skills - 3 questions
 }
+
+
+def get_questions_per_difficulty(state: AgentState) -> Dict[str, int]:
+    """
+    Get the questions per difficulty configuration from state or return default.
+
+    Args:
+        state: The agent state containing optional questions_per_difficulty config
+
+    Returns:
+        Dict[str, int]: Questions per priority level configuration
+    """
+    if state.questions_per_difficulty:
+        return state.questions_per_difficulty
+    return DEFAULT_QUESTIONS_PER_DIFFICULTY
+
+
+def calculate_node_score(node_state: GraphNodeState, candidate_responses: Dict[str, Response]) -> float:
+    """
+    Calculate the score for a node based on correct responses.
+
+    Args:
+        node_state: The node state containing response IDs
+        candidate_responses: Dictionary of responses keyed by question ID
+
+    Returns:
+        float: Score as a percentage (0.0 to 1.0)
+    """
+    if not node_state.responses:
+        return 0.0
+
+    correct_count = 0
+    for response_id in node_state.responses:
+        response = candidate_responses.get(response_id)
+        if response and response.is_correct:
+            correct_count += 1
+
+    return correct_count / len(node_state.responses)
 
 
 def generate_question_for_node(
     context: Dict,
     resume_text: str = "",
-    level: int = 1,
-    questions_per_level: int = 1,
-    max_level: int = 3
+    job_description: Optional[JobDescriptionFields] = None,
+    questions_per_difficulty: Optional[Dict[str, int]] = None
 ) -> Dict:
     """
     Generate MCQ for a skill node using the assembled context
@@ -51,33 +88,43 @@ def generate_question_for_node(
     current_skill = context["current_skill"]
     priority = context["priority"]
     node_history = context["node_history"]
-    recent_history = context["recent_history"]
+    node_qa_history = context.get("node_qa_history", [])
 
-    # Build context-aware prompt
-    difficulty_map = {"H": "advanced", "M": "intermediate", "L": "beginner"}
-    difficulty = difficulty_map.get(priority, "intermediate")
-
-    # Include recent performance context if available
+    # Extract difficulty from job description's skill_depths, not from priority
+    difficulty = "intermediate"  # Default fallback
+    if job_description and job_description.skill_depths:
+        for skill_depth in job_description.skill_depths:
+            if skill_depth.skill.lower() == current_skill.lower():
+                difficulty = skill_depth.depth
+                break    # Include recent performance context if available
     performance_context = ""
     questions_asked_count = len(node_history["questions_asked"])
-    max_questions_for_priority = QUESTIONS_PER_DIFFICULTY.get(priority, 5)
+    questions_config = questions_per_difficulty or DEFAULT_QUESTIONS_PER_DIFFICULTY
+    max_questions_for_priority = questions_config.get(priority, 5)
 
     if questions_asked_count > 0:
         performance_context = f"\nCandidate has answered {questions_asked_count}/{max_questions_for_priority} questions on this skill with current score: {node_history['current_score']:.1%}"
 
-    if recent_history:
-        performance_context += f"\nRecent performance across skills: {len(recent_history)} recent interactions"
+    # Add previous Q&A context to avoid duplicates
+    previous_qa_context = ""
+    if node_qa_history:
+        previous_qa_context = "\n\nPrevious questions asked for this skill:"
+        for i, qa in enumerate(node_qa_history, 1):
+            status = "✓ Correct" if qa["is_correct"] else "✗ Incorrect"
+            previous_qa_context += f"\n{i}. {qa['question']}"
+            previous_qa_context += f"\n   Selected: {qa['selected_answer']} | Correct: {qa['correct_answer']} | {status}"
+        previous_qa_context += "\n\nIMPORTANT: Generate a NEW question that is different from the above. Avoid similar topics, concepts, or question patterns."
 
     prompt = f"""
 You are an AI MCQ generator for technical assessments.
 
 Generate one multiple-choice question (MCQ) about the skill: "{current_skill}".
-The question should match {difficulty} difficulty level (Priority: {priority}).
+The question should match {difficulty} difficulty level (based on job requirements).
 
 Context about candidate's session:
 - Total questions asked: {context['overall_metrics']['total_questions_asked']}
 - Session start: {context['overall_metrics']['session_start']}
-{performance_context}
+{performance_context}{previous_qa_context}
 
 Personalize the question using the candidate's resume if related experience is found.
 
@@ -100,7 +147,6 @@ Return only valid JSON in this format:
   "correct_answer": "",
   "difficulty": "{difficulty}",
   "node": "{current_skill}",
-  "level": {level},
   "matched_resume_info": "..."
 }}
 """
@@ -134,7 +180,6 @@ Return only valid JSON in this format:
             "correct_answer": None,
             "difficulty": "error",
             "node": current_skill,
-            "level": level,
             "matched_resume_info": ""
         }
 
@@ -206,10 +251,11 @@ def initialize(state: AgentState):
                     asked_questions=[],
                     responses=[]
                 )
-            )
-
-    # Set up the processing queue
+            )    # Set up the processing queue
     node_queue = [node.node_id for node in candidate_graph]
+
+    # Set default questions_per_difficulty if not provided
+    questions_per_difficulty = state.questions_per_difficulty or DEFAULT_QUESTIONS_PER_DIFFICULTY
 
     # Return updated state using .copy(update={...}) for proper persistence
     return state.model_copy(deep=True, update={
@@ -217,7 +263,8 @@ def initialize(state: AgentState):
         "total_questions_asked": 0,
         "last_node_id": None,
         "candidate_graph": candidate_graph,
-        "node_queue": node_queue
+        "node_queue": node_queue,
+        "questions_per_difficulty": questions_per_difficulty
     }).model_dump()
 
 
@@ -253,32 +300,29 @@ def generate_question(state: AgentState):
             if node_state.node_id == state.last_node_id:
                 current_node_state = node_state
                 current_node_id = state.last_node_id
-                break
-
-        # Check if current node is completed
+                break        # Check if current node is completed
         if current_node_state:
-            max_questions_for_difficulty = QUESTIONS_PER_DIFFICULTY.get(
+            questions_config = get_questions_per_difficulty(state)
+            max_questions_for_difficulty = questions_config.get(
                 current_node_state.priority, 5)
             questions_asked = len(current_node_state.asked_questions)
 
             # Node is completed if:
             # 1. Reached max questions for difficulty, OR
-            # 2. Passed the threshold, OR
-            # 3. Status is already completed
-            current_score = current_node_state.score if current_node_state.score is not None else 0.0
+            # 3. Status is already completedscore is not None else 0.0
             if (questions_asked >= max_questions_for_difficulty or
-                current_score >= PASS_THRESHOLD or
-                    current_node_state.status == "completed"):
-
-                # Mark as completed and move to next node
+                    current_node_state.status == "completed"):                # Mark as completed and move to next node
                 updated_candidate_graph = []
                 for node_state in state.candidate_graph:
                     if node_state.node_id == current_node_state.node_id:
+                        # Calculate the score of the node using helper function
+                        node_score = calculate_node_score(
+                            node_state, state.candidate_response)
                         # Mark this node as completed
                         updated_node = GraphNodeState(
                             node_id=node_state.node_id,
                             priority=node_state.priority,
-                            score=node_state.score,
+                            score=node_score,
                             status="completed",
                             asked_questions=node_state.asked_questions.copy(),
                             responses=node_state.responses.copy()
@@ -333,22 +377,25 @@ def generate_question(state: AgentState):
 
     if not current_node_state:
         # Skip if node not found in candidate graph
+        # Step 3: Check if we can ask more questions for this node
         return Command(goto="generate_question", update=state.model_dump())
-
-    # Step 3: Check if we can ask more questions for this node
-    max_questions_for_difficulty = QUESTIONS_PER_DIFFICULTY.get(
+    questions_config = get_questions_per_difficulty(state)
+    max_questions_for_difficulty = questions_config.get(
         current_node_state.priority, 5)
     questions_asked = len(current_node_state.asked_questions)
 
+    # This node is done, mark completed and try next
     if questions_asked >= max_questions_for_difficulty:
-        # This node is done, mark completed and try next
         updated_candidate_graph = []
         for node_state in state.candidate_graph:
             if node_state.node_id == current_node_state.node_id:
+                # Calculate the score of the node using helper function
+                node_score = calculate_node_score(
+                    node_state, state.candidate_response)
                 updated_node = GraphNodeState(
                     node_id=node_state.node_id,
                     priority=node_state.priority,
-                    score=node_state.score,
+                    score=node_score,
                     status="completed",
                     asked_questions=node_state.asked_questions.copy(),
                     responses=node_state.responses.copy()
@@ -360,34 +407,24 @@ def generate_question(state: AgentState):
         updated_state = state.model_copy(deep=True, update={
             "candidate_graph": updated_candidate_graph,
             "last_node_id": None
-        })
-        return Command(goto="generate_question", update=updated_state.model_dump())
+        })    # Step 4: Assemble Context for question generation
 
-    current_score = current_node_state.score if current_node_state.score is not None else 0.0
-    if current_score >= PASS_THRESHOLD and questions_asked > 0:
-        # Node passed, mark completed and try next
-        updated_candidate_graph = []
-        for node_state in state.candidate_graph:
-            if node_state.node_id == current_node_state.node_id:
-                updated_node = GraphNodeState(
-                    node_id=node_state.node_id,
-                    priority=node_state.priority,
-                    score=node_state.score,
-                    status="completed",
-                    asked_questions=node_state.asked_questions.copy(),
-                    responses=node_state.responses.copy()
-                )
-                updated_candidate_graph.append(updated_node)
-            else:
-                updated_candidate_graph.append(node_state)
+    # Extract actual questions and responses for current node to avoid duplicates
+    node_qa_history = []
+    for i, question_id in enumerate(current_node_state.asked_questions):
+        question = state.generated_questions.get(question_id)
+        if question and i < len(current_node_state.responses):
+            response_id = current_node_state.responses[i]
+            response = state.candidate_response.get(response_id)
+            if response:
+                node_qa_history.append({
+                    "question": question.prompt,
+                    "options": question.options,
+                    "correct_answer": question.correct_option,
+                    "selected_answer": response.selected_option,
+                    "is_correct": response.is_correct
+                })
 
-        updated_state = state.model_copy(deep=True, update={
-            "candidate_graph": updated_candidate_graph,
-            "last_node_id": None
-        })
-        return Command(goto="generate_question", update=updated_state.model_dump())
-
-    # Step 4: Assemble Context for question generation
     context = {
         "current_skill": current_node_id,
         "priority": current_node_state.priority,
@@ -396,42 +433,18 @@ def generate_question(state: AgentState):
             "responses": current_node_state.responses,
             "current_score": current_node_state.score
         },
-        "recent_history": [],
+        "node_qa_history": node_qa_history,
         "overall_metrics": {
             "total_questions_asked": state.total_questions_asked,
-            "session_start": state.start_time
-        }
-    }
-
-    # Get recent history (last 3 Q&A pairs across all nodes)
-    all_recent_qas = []
-    for node_state in state.candidate_graph:
-        if node_state.status in ["in_progress", "completed"] and node_state.asked_questions:
-            for i, question_id in enumerate(node_state.asked_questions):
-                if i < len(node_state.responses):
-                    response_id = node_state.responses[i]
-                    question = state.generated_questions.get(question_id)
-                    response = state.candidate_response.get(response_id)
-                    if question and response:
-                        all_recent_qas.append({
-                            "skill": node_state.node_id,
-                            "question": question,
-                            "response": response
-                        })
-
-    # Sort by recency and take last 3
-    context["recent_history"] = all_recent_qas[-3:] if len(
-        all_recent_qas) > 3 else all_recent_qas
-
-    # Step 5: Generate MCQ for current node
+            "session_start": state.start_time}
+    }    # Step 5: Generate MCQ for current node
     resume_text = ""  # You can add resume text here later if needed
 
     generated_mcq = generate_question_for_node(
         context=context,
         resume_text=resume_text,
-        level=1,
-        questions_per_level=1,
-        max_level=3
+        job_description=state.parsed_jd,
+        questions_per_difficulty=get_questions_per_difficulty(state)
     )
 
     print(f"Generated MCQ: {generated_mcq}")
@@ -443,10 +456,8 @@ def generate_question(state: AgentState):
             node_id=current_node_id,
             prompt=generated_mcq["question_text"],
             correct_option=generated_mcq.get("correct_answer", "A"),
-            options=generated_mcq.get("options", []),
-            meta={
+            options=generated_mcq.get("options", []),            meta={
                 "difficulty": generated_mcq.get("difficulty", "intermediate"),
-                "level": generated_mcq.get("level", 1),
                 "matched_resume_info": generated_mcq.get("matched_resume_info", "")
             }
         )
@@ -474,29 +485,7 @@ def generate_question(state: AgentState):
             "candidate_graph": updated_candidate_graph,
             "generated_questions": {**state.generated_questions, question.question_id: question},
             "total_questions_asked": state.total_questions_asked + 1,
-            "question_queue": state.question_queue + [question.question_id]
-        })
-
-    # Update recent_history in state for future context building
-    # recent_qa_pairs = []
-    # for node_state in state.candidate_graph:
-    #     if node_state.status in ["in_progress", "completed"] and node_state.asked_questions:
-    #         for i, question_id in enumerate(node_state.asked_questions):
-    #             if i < len(node_state.responses):
-    #                 response_id = node_state.responses[i]
-    #                 question = state.generated_questions.get(question_id)
-    #                 response = state.candidate_response.get(response_id)
-    #                 if question and response:
-    #                     recent_qa_pairs.append((question, response))
-
-    # # Keep only the last 3 Q&A pairs
-    # state.recent_history = recent_qa_pairs[-3:] if len(
-    #     recent_qa_pairs) > 3 else recent_qa_pairs
-
-    # Step 6: Use interrupt to pause and wait for user response
-    if question:
-        print(f"Generated question: {question.prompt}")
-        # Question queue already updated above in state.model_copy(deep=True,)
+            "question_queue": state.question_queue + [question.question_id]})
 
     # Update metadata
     final_state = state.model_copy(deep=True, update={
@@ -518,6 +507,20 @@ def interrupt_node(state: AgentState):
     """
     """
     print("Handling interrupt node...")
+    # check if test can be submitted
+    if state.finalized:
+        print("Assessment already finalized, cannot interrupt.")
+        return Command(goto="finalize_assessment", update=state.model_dump())
+
+    # End conditions
+    # 1. If no nodes in node_queue and last_node_id is None and question_queue is empty, finalize assessment
+    if not state.node_queue and not state.last_node_id and not state.question_queue:
+        state.metadata = {
+            "message": "No more nodes or questions to process, finalizing assessment."
+        }
+        print("No more nodes or questions to process, finalizing assessment.")
+        return Command(goto="finalize_assessment", update=state.model_dump())
+
     user_response = interrupt({
         "metadata": state.metadata,
     })
@@ -620,16 +623,24 @@ def interrupt_node(state: AgentState):
                 update=updated_state.model_dump()
             )
         case "exit":
-            print("Exiting assessment...")
             updated_state = state.model_copy(deep=True, update={
                 "metadata": {
                     "message": "Exiting assessment."
                 }
             })
             return Command(
-                goto=END,
+                goto="finalize_assessment",
                 update=updated_state.model_dump()
             )
+
+
+def finalize_assessment(state: AgentState):
+    """
+    Finalize the assessment by cleaning up state and returning results.
+    This is called when the assessment is complete or the user exits.
+    """
+    state.finalized = True
+    return Command(goto=END, update=state.model_dump())
 
 
 raw_graph = StateGraph(AgentState)

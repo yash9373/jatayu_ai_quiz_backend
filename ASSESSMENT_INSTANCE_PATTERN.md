@@ -123,7 +123,12 @@ self.active_graphs[connection_id] = {
 async def finalize_assessment(self, connection_id: str, db: AsyncSession) -> Optional[Dict[str, Any]]:
     # Save results to database - update the assessment instance
     assessment_repo = AssessmentRepository(db)
-    update_success = await assessment_repo.update_assessment_status(assessment_id, status_data)
+    update_success = await assessment_repo.update_assessment_status(
+        assessment_id=assessment_id,
+        status="completed",
+        percentage_score=final_score,
+        end_time=datetime.utcnow()
+    )
 
     final_results = {
         "assessment_id": assessment_id,  # Real assessment ID, not generated

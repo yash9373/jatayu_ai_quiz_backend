@@ -90,16 +90,41 @@ class AssessmentRepository:
                 f"Error checking existing assessment for user {user_id}, test {test_id}: {str(e)}")
             return None
 
-    async def update_assessment_status(self, assessment_id: int, status_data: dict) -> bool:
-        """Update assessment with completion status and results"""
+    async def update_assessment_status(
+        self,
+        assessment_id: int,
+        status: str,
+        percentage_score: float,
+        end_time: Optional[datetime] = None
+    ) -> bool:
+        """
+        Update assessment with completion status and results
+
+        Args:
+            assessment_id: The assessment ID to update
+            status: Assessment status string (e.g., "completed")
+            percentage_score: Final percentage score for the assessment
+            end_time: Optional end time for the assessment
+
+        Returns:
+            bool: True if update was successful, False otherwise
+        """
         try:
+            # Prepare update values
+            update_values = {
+                "status": status,
+                "percentage_score": percentage_score,
+                "updated_at": datetime.utcnow()
+            }
+
+            # Add end_time if provided
+            if end_time:
+                update_values["end_time"] = end_time
+
             # Update assessment record using SQLAlchemy update statement
             stmt = update(Assessment).where(
                 Assessment.assessment_id == assessment_id
-            ).values(
-                updated_at=datetime.utcnow(),
-                **status_data  # Any additional status fields
-            )
+            ).values(**update_values)
 
             result = await self.db.execute(stmt)
             await self.db.commit()
@@ -147,3 +172,32 @@ class AssessmentRepository:
             select(Assessment).where(Assessment.user_id == user_id)
         )
         return result.scalars().all()
+
+    async def is_assessment_completed(self, user_id: int, test_id: int) -> bool:
+        """
+        Check if user already has a completed assessment for this test
+
+        Args:
+            user_id: User ID to check
+            test_id: Test ID to check
+
+        Returns:
+            bool: True if user has a completed assessment, False otherwise
+        """
+        try:
+            from app.models.assessment import AssessmentStatus
+
+            result = await self.db.execute(
+                select(Assessment).where(
+                    Assessment.user_id == user_id,
+                    Assessment.test_id == test_id,
+                    Assessment.status == AssessmentStatus.COMPLETED.value
+                )
+            )
+            completed_assessment = result.scalar_one_or_none()
+            return completed_assessment is not None
+
+        except Exception as e:
+            logger.error(
+                f"Error checking completed assessment for user {user_id}, test {test_id}: {str(e)}")
+            return False

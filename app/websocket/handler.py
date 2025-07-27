@@ -8,7 +8,7 @@ from app.websocket.connection_manager import connection_manager, ConnectionState
 from app.db.database import get_db
 from app.services.websocket_assessment_service import assessment_graph_service
 from app.repositories.test_repo import TestRepository
-
+from app.repositories.assessment_repo import AssessmentRepository
 logger = logging.getLogger(__name__)
 
 
@@ -29,7 +29,7 @@ class WebSocketMessageType:
     ASSESSMENT_STARTED = "assessment_started"
     ASSESSMENT_ERROR = "assessment_error"
     ASSESSMENT_COMPLETED = "assessment_completed"
-
+    ASSESSMENT_FINALIZED = "complete_assessment"
     # Question handling
     GET_QUESTION = "get_question"
     QUESTION = "question"
@@ -75,6 +75,7 @@ class AssessmentWebSocketHandler:
                 await websocket.close(code=4001, reason="Authentication failed")
                 logger.info(f"Authentication failed")
                 return
+
             # Step 3: Send authentication success confirmation
             connection_id = await connection_manager.connect(websocket, user_id, test_id, db)
             connection_info = connection_manager.get_connection_info(
@@ -85,6 +86,11 @@ class AssessmentWebSocketHandler:
                 "timestamp": datetime.utcnow().isoformat()
             }
 
+            assessment_repo = AssessmentRepository(db)
+            is_completed = await assessment_repo.is_assessment_completed(user_id, test_id)
+            if is_completed:
+                await self._send_error(connection_id, "You have already completed this assessment.")
+                await websocket.close(code=4002, reason="Assessment already completed")
             # Include recovery information if assessment was auto-recovered
             if connection_info and connection_info.get("assessment_id"):
                 auth_data["recovered_assessment"] = {
@@ -186,6 +192,8 @@ class AssessmentWebSocketHandler:
             WebSocketMessageType.CHAT_MESSAGE: self._handle_chat_message,
             WebSocketMessageType.HEARTBEAT: self._handle_heartbeat,
             WebSocketMessageType.GET_TEST_INFO: self._handle_get_test_info,
+            WebSocketMessageType.ASSESSMENT_FINALIZED: self._finalize_assessment,
+
         }
 
         handler = handlers.get(message_type)
@@ -381,6 +389,13 @@ class AssessmentWebSocketHandler:
                         "timestamp": datetime.utcnow().isoformat()
                     }
                 })
+                thread_id = connection_manager.get_connection_thread_id(
+                    connection_id)
+                if not thread_id:
+                    return
+                # check if assessment can be finalized
+                state = await assessment_graph_service.get_assessment_state(
+                    thread_id=thread_id, db=db)
 
         except Exception as e:
             logger.error(f"Error generating question: {str(e)}", exc_info=True)
@@ -412,7 +427,7 @@ class AssessmentWebSocketHandler:
             }
         })
 
-    async def _finalize_assessment(self, connection_id: str, db: AsyncSession):
+    async def _finalize_assessment(self, connection_id: str, data: str, db: AsyncSession):
         """
         Finalize assessment and save results using proper thread_id management
         """
@@ -426,7 +441,6 @@ class AssessmentWebSocketHandler:
                     "type": WebSocketMessageType.ASSESSMENT_COMPLETED,
                     "data": {
                         "message": "Assessment completed! Thank you for participating.",
-                        "results": final_results,
                         "next_steps": "Your results will be reviewed and you'll be contacted if shortlisted."
                     }
                 })

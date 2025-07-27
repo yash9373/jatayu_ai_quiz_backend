@@ -24,26 +24,12 @@ class Assessment(Base):
 
     # Assessment status and progress
     status = Column(String(20), default=AssessmentStatus.STARTED.value)
-    questions_answered = Column(Integer, default=0)
-    total_questions = Column(Integer, nullable=True)
-    current_question_index = Column(Integer, default=0)
 
-    # Scoring
-    total_score = Column(Float, default=0.0)
-    max_possible_score = Column(Float, nullable=True)
     percentage_score = Column(Float, nullable=True)
 
     # Timing
     start_time = Column(DateTime, nullable=True)
     end_time = Column(DateTime, nullable=True)
-    time_taken_minutes = Column(Integer, nullable=True)
-    time_limit_minutes = Column(Integer, nullable=True)
-
-    # Results and data
-    # JSON string of question-answer pairs
-    answers_data = Column(Text, nullable=True)
-    # JSON string of skill-wise performance
-    skill_assessment_data = Column(Text, nullable=True)
 
     # Audit fields
     created_at = Column(DateTime, default=datetime.utcnow)

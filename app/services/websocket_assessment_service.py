@@ -17,6 +17,7 @@ from app.services.resume_parsing.state import ResumeFields
 from app.services.mcq_generation.state import AgentState, Question, Response
 from app.services.skill_graph_generation.state import SkillGraph
 from app.models.test import Test
+from app.models.assessment import AssessmentStatus
 from app.repositories.test_repo import TestRepository
 from app.repositories.candidate_application_repo import CandidateApplicationRepository
 from app.repositories.assessment_repo import AssessmentRepository
@@ -305,7 +306,7 @@ class AssessmentGraphService:
             processed_nodes = updated_state.values.get("processed_nodes", [])
 
             total_nodes = len(node_queue) + len(processed_nodes)
-            last_node = updated_state.values.get("last_node", None)
+            last_node = updated_state.values.get("last_node_id", None)
             if last_node:
                 total_nodes += 1
             completed_nodes = len(processed_nodes)
@@ -386,8 +387,11 @@ class AssessmentGraphService:
             processed_nodes = updated_state.values.get("processed_nodes", [])
 
             total_nodes = len(node_queue)
+            last_node = updated_state.values.get("last_node_id", None)
+            if last_node:
+                total_nodes += 1
             completed_nodes = len(processed_nodes)
-            progress = (completed_nodes / total_nodes) * 100
+            progress = (completed_nodes / (total_nodes or 1)) * 100
 
             return {
                 "total_nodes": total_nodes,
@@ -455,60 +459,135 @@ class AssessmentGraphService:
                     f"No thread_id found for connection {connection_id}")
                 return None
 
+            # Extract state from graph
             graph = await self._get_graph()
-            config = RunnableConfig(
-                configurable={"thread_id": thread_id}
-            )
+            config = RunnableConfig(configurable={"thread_id": thread_id})
+            state = await graph.ainvoke(Command(resume={"type": "exit"}), config=config)
 
-            # Get final state
-            final_state = await graph.aget_state(config)
-            if not final_state.values:
-                logger.error(f"No final state found for thread {thread_id}")
+            state = await graph.aget_state(config)
+            if not state.values:
+                logger.error(f"No state found for thread {thread_id}")
+                return None
+            state_values = json.loads(
+                json.dumps(state.values, cls=StateEncoder))
+
+            if not state_values:
+                logger.error(f"No state found for thread {thread_id}")
                 return None
 
-            generated_questions = final_state.values.get(
-                "generated_questions", {})
-            responses = final_state.values.get("candidate_response", {})
+            # Extract candidate_graph (nodes with scores and priorities)
+            candidate_graph = state_values.get("candidate_graph", [])
+            if not candidate_graph:
+                logger.error(
+                    f"No candidate_graph found in state for thread {thread_id}")
+                return None
 
-            # Calculate final score
-            correct_answers = 0
-            total_questions = len(generated_questions)
+            # Calculate weighted score using the specified formula
+            # Weights for High, Medium, Low priority
+            skill_weights = {"H": 3, "M": 2, "L": 1}
 
-            for question_id, response in responses.items():
-                question = generated_questions.get(question_id)
-                if question and hasattr(question, 'correct_answer'):
-                    if getattr(response, 'selected_option', None) == question.correct_answer:
-                        correct_answers += 1
+            skill_scores = {}
 
-            final_score = (correct_answers / total_questions *
-                           100) if total_questions > 0 else 0
+            # Group nodes by priority and calculate scores
+            for node in candidate_graph:
+                priority = node.get("priority")
+                score = node.get("score")
 
-            # Save results to database
+                if priority and score is not None:
+                    if priority not in skill_scores:
+                        skill_scores[priority] = []
+                    skill_scores[priority].append(score)
+
+            # Calculate average score per skill level
+            level_scores = {}
+            for priority, scores in skill_scores.items():
+                if scores:
+                    level_scores[priority] = (sum(scores) / len(scores)) * 100
+
+            # Calculate final weighted score
+            if level_scores:
+                numerator = sum(level_scores[priority] * skill_weights[priority]
+                                for priority in level_scores)
+                denominator = sum(skill_weights[priority]
+                                  for priority in level_scores)
+                final_percentage_score = numerator / denominator
+            else:
+                final_percentage_score = 0.0
+              # Update assessment in database
             assessment_repo = AssessmentRepository(db)
             assessment_id = int(thread_id)
 
-            await assessment_repo.update_assessment_status(
+            current_time = datetime.utcnow()
+
+            success = await assessment_repo.update_assessment_status(
                 assessment_id=assessment_id,
-                status_data={
-                    'final_score': final_score,
-                    'responses': json.dumps(responses) if responses else None,
-                    'status': 'completed'
-                }
+                status="completed",
+                percentage_score=final_percentage_score,
+                end_time=current_time
             )
+
+            if not success:
+                logger.error(f"Failed to update assessment {assessment_id}")
+                return None
 
             # Clean up thread tracking
             if thread_id in self.initialized_threads:
                 del self.initialized_threads[thread_id]
 
+            # Prepare detailed results
+            skill_breakdown = {}
+            total_questions = 0
+            total_correct = 0
+
+            for node in candidate_graph:
+                priority = node.get("priority")
+                score = node.get("score", 0)
+                node_id = node.get("node_id")
+                asked_questions = node.get("asked_questions", [])
+
+                if priority not in skill_breakdown:
+                    skill_breakdown[priority] = {
+                        "nodes": [],
+                        "total_questions": 0,
+                        "average_score": 0
+                    }
+
+                node_questions = len(asked_questions)
+                node_correct = int(
+                    score * node_questions) if score and node_questions > 0 else 0
+
+                skill_breakdown[priority]["nodes"].append({
+                    "skill": node_id,
+                    "score": score * 100 if score else 0,
+                    "questions_asked": node_questions,
+                    "correct_answers": node_correct
+                })
+
+                skill_breakdown[priority]["total_questions"] += node_questions
+                total_questions += node_questions
+                total_correct += node_correct
+
+            # Calculate average scores per priority level
+            for priority in skill_breakdown:
+                nodes = skill_breakdown[priority]["nodes"]
+                if nodes:
+                    skill_breakdown[priority]["average_score"] = sum(
+                        node["score"] for node in nodes
+                    ) / len(nodes)
+
             logger.info(
-                f"Finalized assessment for thread {thread_id} with score {final_score}")
+                f"Finalized assessment for thread {thread_id} with score {final_percentage_score:.2f}%")
 
             return {
-                "final_score": final_score,
-                "correct_answers": correct_answers,
-                "total_questions": total_questions,
                 "assessment_id": assessment_id,
-                "thread_id": thread_id
+                "thread_id": thread_id,
+                "final_percentage_score": round(final_percentage_score, 2),
+                "total_questions": total_questions,
+                "total_correct": total_correct,
+                "skill_breakdown": skill_breakdown,
+                "level_scores": {k: round(v, 2) for k, v in level_scores.items()},
+                "completion_time": current_time.isoformat(),
+                "status": "completed"
             }
 
         except Exception as e:
