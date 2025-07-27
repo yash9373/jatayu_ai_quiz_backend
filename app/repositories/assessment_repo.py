@@ -131,10 +131,12 @@ class AssessmentRepository:
             user_id = app.user_id
             application_id = app.application_id
             exists = await db.execute(
-                select(Assessment).where(Assessment.user_id == user_id, Assessment.test_id == test_id)
+                select(Assessment).where(Assessment.user_id ==
+                                         user_id, Assessment.test_id == test_id)
             )
             if not exists.scalar():
-                stmt = insert(Assessment).values(user_id=user_id, test_id=test_id, application_id=application_id)
+                stmt = insert(Assessment).values(user_id=user_id,
+                                                 test_id=test_id, application_id=application_id)
                 await db.execute(stmt)
         await db.commit()
 

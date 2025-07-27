@@ -1,18 +1,13 @@
-import asyncio
 import json
 import logging
 from datetime import datetime
-from typing import Dict, Optional, Any, List
-from fastapi import WebSocket, WebSocketDisconnect, Depends, HTTPException, Query
+from typing import Dict, Optional
+from fastapi import WebSocket, WebSocketDisconnect, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.websocket.connection_manager import connection_manager, ConnectionState
 from app.db.database import get_db
 from app.services.websocket_assessment_service import assessment_graph_service
-from app.services.mcq_generation.state import AgentState, Question, Response, GraphNodeState
 from app.repositories.test_repo import TestRepository
-from app.repositories.candidate_application_repo import CandidateApplicationRepository
-from app.models.test import Test
 
 logger = logging.getLogger(__name__)
 
@@ -47,42 +42,16 @@ class WebSocketMessageType:
     # System messages
     ERROR = "error"
     HEARTBEAT = "heartbeat"
-    PONG = "pong"
-
-    # Chat messages
+    PONG = "pong"    # Chat messages
     CHAT_MESSAGE = "chat_message"
     SYSTEM_MESSAGE = "system_message"
 
+    # Testing/Debug messages
+    GET_TEST_INFO = "get_test_info"
+    TEST_INFO = "test_info"
+
 
 class AssessmentWebSocketHandler:
-    """
-    Handles WebSocket communication for AI-powered assessment chatbot
-
-    This class manages the entire conversation flow between the client and the AI
-    assessment system. It orchestrates question generation, answer processing,
-    progress tracking, and result finalization.
-
-    Key Responsibilities:
-    - Connection lifecycle management (authentication, authorization, cleanup)
-    - Message routing based on message type
-    - Assessment session orchestration
-    - Error handling and user feedback
-    - Integration with AI services for dynamic question generation
-
-    Message Flow:
-    1. Client connects -> Authentication -> Connection established
-    2. Client requests assessment start -> Validation -> Assessment initialized
-    3. Questions generated dynamically by AI -> Sent to client
-    4. Client submits answers -> Processed by AI -> Feedback provided
-    5. Assessment completion -> Results saved -> Final feedback sent
-
-    Reconnection Support:
-    The handler seamlessly supports reconnection scenarios by:
-    - Checking for existing assessment sessions
-    - Recovering assessment state from database
-    - Resuming from the last known progress point
-    """
-
     def __init__(self):
         pass
 
@@ -93,41 +62,7 @@ class AssessmentWebSocketHandler:
         test_id: Optional[int] = None,
         db: AsyncSession = Depends(get_db)
     ):
-        """
-        Main WebSocket connection handler - orchestrates the entire connection lifecycle
-
-        This is the entry point for all WebSocket connections. It handles the complete
-        lifecycle from initial connection through authentication, authorization, message
-        processing, and cleanup.
-
-        Connection Lifecycle:
-        1. Authentication: Validate JWT token and extract user identity
-        2. Connection Establishment: Register connection with connection manager
-        3. Authorization: Validate test access if test_id provided
-        4. Message Loop: Process incoming messages until disconnection
-        5. Cleanup: Remove connection and clean up resources
-
-        Args:
-            websocket: The WebSocket connection object
-            token: JWT authentication token (required)
-            test_id: Optional test ID if joining specific assessment
-            db: Database session dependency
-
-        Error Handling:
-        - Authentication failures -> Close with 4001 (Unauthorized)
-        - Authorization failures -> Close with 4003 (Forbidden)
-        - Network disconnections -> Graceful cleanup and logging
-        - Unexpected errors -> Error message + cleanup
-
-        Reconnection Scenario:
-        If a user reconnects with the same token and test_id, the system will:
-        1. Authenticate the user
-        2. Check for existing assessment sessions
-        3. Recover state if assessment is in progress
-        4. Resume from last known state
-        """
         connection_id = None
-
         try:
             # Step 1: Authenticate the connection
             if not token:
@@ -135,21 +70,33 @@ class AssessmentWebSocketHandler:
                 return
 
             user_id = await connection_manager.authenticate_connection(websocket, token)
+
             if not user_id:
                 await websocket.close(code=4001, reason="Authentication failed")
+                logger.info(f"Authentication failed")
                 return
-
-            # Step 2: Establish connection in connection manager
-            connection_id = await connection_manager.connect(websocket, user_id, test_id)
-
             # Step 3: Send authentication success confirmation
+            connection_id = await connection_manager.connect(websocket, user_id, test_id, db)
+            connection_info = connection_manager.get_connection_info(
+                connection_id)
+            auth_data = {
+                "user_id": user_id,
+                "connection_id": connection_id,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+            # Include recovery information if assessment was auto-recovered
+            if connection_info and connection_info.get("assessment_id"):
+                auth_data["recovered_assessment"] = {
+                    "assessment_id": connection_info["assessment_id"],
+                    "test_id": connection_info["test_id"],
+                    "thread_id": connection_info["thread_id"],
+                    "is_in_assessment": connection_info["is_in_assessment"]
+                }
+
             await self._send_message(connection_id, {
                 "type": WebSocketMessageType.AUTH_SUCCESS,
-                "data": {
-                    "user_id": user_id,
-                    "connection_id": connection_id,
-                    "timestamp": datetime.utcnow().isoformat()
-                }
+                "data": auth_data
             })
 
             # Step 4: If test_id provided, validate assessment access
@@ -179,29 +126,6 @@ class AssessmentWebSocketHandler:
                 assessment_graph_service.cleanup_connection(connection_id)
 
     async def _handle_messages(self, connection_id: str, websocket: WebSocket, db: AsyncSession):
-        """
-        Handle incoming WebSocket messages in a continuous loop
-
-        This method runs continuously until the WebSocket connection is closed,
-        processing each incoming message and routing it to the appropriate handler.
-
-        Message Processing:
-        1. Receive and parse JSON message
-        2. Extract message type and data
-        3. Route to appropriate handler method
-        4. Handle errors and provide feedback
-
-        Error Handling:
-        - JSON parsing errors -> Send error message to client
-        - Unknown message types -> Send error message to client  
-        - Handler exceptions -> Log error and send error message
-        - WebSocket disconnection -> Exit loop gracefully
-
-        Activity Tracking:
-        Each processed message updates the connection's last_activity timestamp
-        through the connection manager, which is used for cleanup purposes.
-        """
-
         while True:
             try:
                 # Wait for message from client
@@ -211,6 +135,9 @@ class AssessmentWebSocketHandler:
                 message_type = message.get("type")
                 message_data = message.get("data", {})
 
+                if not message_type:
+                    raise ValueError(
+                        "Cannot Process the request without message_type")
                 logger.info(
                     f"Received message: {message_type} from {connection_id}")
 
@@ -247,9 +174,7 @@ class AssessmentWebSocketHandler:
             connection_id: Identifier for the WebSocket connection
             message_type: String identifying the type of message
             data: Dictionary containing message payload
-            db: Database session for data operations
-
-        Error Handling:
+            db: Database session for data operations        Error Handling:
         If an unknown message type is received, an error is sent back to the client
         rather than raising an exception, allowing the connection to continue.
         """
@@ -260,6 +185,7 @@ class AssessmentWebSocketHandler:
             WebSocketMessageType.SUBMIT_ANSWER: self._handle_submit_answer,
             WebSocketMessageType.CHAT_MESSAGE: self._handle_chat_message,
             WebSocketMessageType.HEARTBEAT: self._handle_heartbeat,
+            WebSocketMessageType.GET_TEST_INFO: self._handle_get_test_info,
         }
 
         handler = handlers.get(message_type)
@@ -283,26 +209,29 @@ class AssessmentWebSocketHandler:
                 return
 
             # Validate assessment access again
-            access_granted = await connection_manager.validate_assessment_access(
-                connection_id, test_id, db
-            )
+            access_granted = await connection_manager.validate_assessment_access(connection_id, test_id, db)
             if not access_granted:
                 await self._send_error(connection_id, "Access denied for this assessment")
                 return
 
-            # Get test details
             test_repo = TestRepository(db)
+
             test = await test_repo.get_test_by_id(test_id)
             if not test:
                 await self._send_error(connection_id, "Test not found")
                 return
 
             # Start assessment session and create assessment instance
-            assessment_id = await connection_manager.start_assessment_session(connection_id, test_id, db)
+            assessment_id, returned_connection_id = await connection_manager.start_assessment_session(connection_id, test_id, db)
+            logger.info(
+                f"Assessment ID: {assessment_id}, Connection ID: {returned_connection_id}")
 
-            if not assessment_id:
+            if not assessment_id or not returned_connection_id:
                 await self._send_error(connection_id, "Failed to create assessment instance")
                 return
+
+            # Connection ID should remain the same with new approach
+            assert returned_connection_id == connection_id, "Connection ID should not change"
 
             # Initialize MCQ generation graph with proper thread_id management
             graph_initialized = await assessment_graph_service.initialize_assessment_graph(
@@ -324,12 +253,8 @@ class AssessmentWebSocketHandler:
                     "assessment_id": assessment_id,
                     "thread_id": str(assessment_id),
                     "test_name": test.test_name,
-                    "time_limit_minutes": test.time_limit_minutes,
-                    "total_questions": test.total_questions,
-                    "message": "Assessment started! I'm your AI interviewer. Let's begin with some questions based on the job requirements."
                 }
             })
-
             # Generate first question automatically
             await self._generate_next_question(connection_id, test_id, db)
 
@@ -351,8 +276,14 @@ class AssessmentWebSocketHandler:
                     "data": question_data
                 })
             else:
-                # Assessment complete or error
-                await self._finalize_assessment(connection_id, db)
+                # No more questions available - send message but don't auto-finalize
+                await self._send_message(connection_id, {
+                    "type": WebSocketMessageType.SYSTEM_MESSAGE,
+                    "data": {
+                        "message": "No more questions available. You may continue or complete the assessment manually.",
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                })
 
         except Exception as e:
             logger.error(f"Error generating question: {str(e)}", exc_info=True)
@@ -384,16 +315,13 @@ class AssessmentWebSocketHandler:
             await self._send_message(connection_id, {
                 "type": WebSocketMessageType.ANSWER_FEEDBACK,
                 "data": feedback_data
-            })
-
-            # Send progress update
+            })            # Send progress update
             progress_data = await assessment_graph_service.get_assessment_progress(connection_id)
             if progress_data:
                 await self._send_progress_update(connection_id, progress_data)
 
-            # Check if assessment is complete
-            if feedback_data["progress"]["percentage_complete"] >= 100:
-                await self._finalize_assessment(connection_id, db)
+            # Note: Auto-finalization removed - assessment must be completed manually
+            # Users can continue answering more questions or complete manually
 
         except Exception as e:
             logger.error(f"Error processing answer: {str(e)}", exc_info=True)
@@ -413,9 +341,7 @@ class AssessmentWebSocketHandler:
 
             # TODO: Implement AI chat functionality
             # This could use the same LLM to provide contextual help
-            # without revealing answers to current questions
-
-            # Placeholder response
+            # without revealing answers to current questions            # Placeholder response
             response_message = f"I understand you said: '{user_message}'. I'm here to guide you through the assessment. Would you like me to generate the next question?"
 
             await self._send_message(connection_id, {
@@ -438,9 +364,6 @@ class AssessmentWebSocketHandler:
         })
 
     async def _generate_next_question(self, connection_id: str, test_id: Optional[int], db: AsyncSession):
-        """
-        Generate the next question using assessment graph service with proper thread_id management
-        """
         try:
             question_data = await assessment_graph_service.generate_question(connection_id)
 
@@ -450,8 +373,14 @@ class AssessmentWebSocketHandler:
                     "data": question_data
                 })
             else:
-                # Assessment complete or no more questions
-                await self._finalize_assessment(connection_id, db)
+                # No more questions available - send message but don't auto-finalize
+                await self._send_message(connection_id, {
+                    "type": WebSocketMessageType.SYSTEM_MESSAGE,
+                    "data": {
+                        "message": "No more questions available at this time. You may continue or complete the assessment manually.",
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                })
 
         except Exception as e:
             logger.error(f"Error generating question: {str(e)}", exc_info=True)
@@ -513,6 +442,103 @@ class AssessmentWebSocketHandler:
             logger.error(
                 f"Error finalizing assessment: {str(e)}", exc_info=True)
             await self._send_error(connection_id, f"Failed to complete assessment: {str(e)}")
+
+    async def _handle_get_test_info(self, connection_id: str, data: Dict, db: AsyncSession):
+        """
+        Handle request for test information using thread_id (for testing/debugging purposes)
+
+        This method retrieves and returns comprehensive test information based on the 
+        connection's thread_id. Useful for debugging assessment state and recovery.
+        """
+        try:
+            # Get connection info
+            connection_info = connection_manager.get_connection_info(
+                connection_id)
+            if not connection_info:
+                await self._send_error(connection_id, "Connection not found")
+                return
+
+            # Check if connection has an active assessment
+            if not connection_info.get("thread_id") or not connection_info.get("assessment_id"):
+                await self._send_error(connection_id, "No active assessment found for this connection")
+                return
+
+            thread_id = connection_info["thread_id"]
+            assessment_id = connection_info["assessment_id"]
+            test_id = connection_info["test_id"]
+            user_id = connection_info["user_id"]
+
+            # Get test details from repository
+            test_repo = TestRepository(db)
+            test = await test_repo.get_test_by_id(test_id)
+
+            if not test:
+                await self._send_error(connection_id, f"Test {test_id} not found")
+                return
+
+            # Get assessment details
+            from app.repositories.assessment_repo import AssessmentRepository
+            assessment_repo = AssessmentRepository(db)
+            assessment = await assessment_repo.get_assessment_by_id(assessment_id)
+
+            # Prepare comprehensive test info
+            test_info = {
+                "connection_info": {
+                    "connection_id": connection_id,
+                    "user_id": user_id,
+                    "thread_id": thread_id,
+                    "assessment_id": assessment_id,
+                    "is_authenticated": connection_info.get("is_authenticated"),
+                    "is_in_assessment": connection_info.get("is_in_assessment"),
+                    "graph_initialized": connection_info.get("graph_initialized"),
+                    "connected_at": connection_info.get("connected_at"),
+                    "last_activity": connection_info.get("last_activity"),
+                    "assessment_started_at": connection_info.get("assessment_started_at")
+                },
+                "assessment_details": None
+            }
+
+            # Add assessment deta`ils if available
+            if assessment:
+                test_info["assessment_details"] = {
+                    "assessment_id": assessment.assessment_id,
+                    "status": getattr(assessment, 'status', None),
+                    "started_at": assessment.started_at.isoformat() if hasattr(assessment, 'started_at') and assessment.started_at else None,
+                    "completed_at": assessment.completed_at.isoformat() if hasattr(assessment, 'completed_at') and assessment.completed_at else None,
+                    "score": getattr(assessment, 'score', None),
+                    "total_questions_answered": getattr(assessment, 'total_questions_answered', 0)
+                }            # Get graph state information using the assessment service
+            try:
+                graph_state_info = await assessment_graph_service.get_assessment_state(thread_id, db)
+                if graph_state_info:
+                    test_info["graph_state"] = graph_state_info
+
+                else:
+                    test_info["graph_state"] = {
+                        "has_state": False,
+                        "note": "No graph state found for this connection"
+                    }
+            except Exception as e:
+                test_info["graph_state"] = {
+                    "error": f"Failed to get graph state: {str(e)}"}
+
+            # Send the comprehensive test info
+            await self._send_message(connection_id, {
+                "type": WebSocketMessageType.TEST_INFO,
+                "data": {
+                    "message": f"Test information retrieved for thread_id: {thread_id}",
+                    "test_info": test_info,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            })
+
+            logger.info(
+                f"Test info retrieved for connection {connection_id}, thread_id: {thread_id}")
+
+        except Exception as e:
+            logger.error(
+                f"Error handling get_test_info: {str(e)}", exc_info=True)
+            await self._send_error(connection_id, f"Failed to retrieve test info: {str(e)}")
 
 
 # Global handler instance

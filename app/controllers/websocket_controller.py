@@ -34,6 +34,7 @@ async def websocket_assessment_endpoint(
     Example connection:
     ws://localhost:8000/ws/assessment?token=YOUR_JWT_TOKEN&test_id=123
     """
+    print("WebSocket connection established for assessment")
     await websocket_handler.handle_connection(websocket, token, test_id, db)
 
 
@@ -56,4 +57,5 @@ async def websocket_chat_endpoint(
     Example connection:
     ws://localhost:8000/ws/chat?token=YOUR_JWT_TOKEN
     """
+    print("WebSocket connection established for chat")
     await websocket_handler.handle_connection(websocket, token, None, db)
