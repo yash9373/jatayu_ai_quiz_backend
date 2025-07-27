@@ -57,6 +57,29 @@ logger = logging.getLogger(__name__)
 
 
 class TestService:
+    async def update_question_counts(self, test_id: int, data, user_id: int, db: AsyncSession) -> dict:
+        """Update per-priority question counts, total_questions, and time_limit_minutes for a test."""
+        repo = TestRepository(db)
+        test = await repo.get_test_by_id(test_id)
+        if not test:
+            raise HTTPException(status_code=404, detail="Test not found")
+        if test.created_by != user_id:
+            raise HTTPException(status_code=403, detail="You can only update your own tests")
+        high = data.high_priority_questions
+        medium = data.medium_priority_questions
+        low = data.low_priority_questions
+        total_questions = data.total_questions
+        time_limit_minutes = data.time_limit_minutes
+        await repo.update_question_counts(test_id, high, medium, low, total_questions, time_limit_minutes)
+        return {
+            "test_id": test_id,
+            "high_priority_questions": high,
+            "medium_priority_questions": medium,
+            "low_priority_questions": low,
+            "total_questions": total_questions,
+            "time_limit_minutes": time_limit_minutes,
+            "message": "Question counts and time limit updated successfully."
+        }
     async def update_test_job_description(self, test_id: int, test_data: TestUpdate, updated_by: int, db: AsyncSession) -> TestResponse:
         """Update job description, resume_score_threshold, max_shortlisted_candidates, and auto_shortlist for a test. Skill graph will be updated if job description changes."""
         try:
@@ -81,8 +104,9 @@ class TestService:
                 if skill_graph and isinstance(skill_graph, dict) and "root_nodes" in skill_graph:
                     node_counts = count_nodes_by_priority(SkillGraph.model_validate(skill_graph))
                     high_priority_questions = node_counts["H"] * 5
-                    medium_priority_questions = node_counts["M"] * 5
-                    low_priority_questions = node_counts["L"] * 5
+                    medium_priority_questions = node_counts["M"] * 3
+                    low_priority_questions = node_counts["L"] * 33
+
                     total_questions = high_priority_questions + medium_priority_questions + low_priority_questions
                     total_seconds = (
                         (high_priority_questions * 90) +
@@ -192,11 +216,24 @@ class TestService:
                     test_data.high_priority_nodes = node_counts["H"]
                     test_data.medium_priority_nodes = node_counts["M"]
                     test_data.low_priority_nodes = node_counts["L"]
+
+                    # Set initial question counts based on node counts
+                    test_data.high_priority_questions = node_counts["H"] * 5
+                    test_data.medium_priority_questions = node_counts["M"] * 3
+                    test_data.low_priority_questions = node_counts["L"] * 3
                     test_data.total_questions = (
-                        node_counts["H"] * 5 +
-                        node_counts["M"] * 5 +
-                        node_counts["L"] * 5
+                        test_data.high_priority_questions +
+                        test_data.medium_priority_questions +
+                        test_data.low_priority_questions
                     )
+                    # Calculate time limit in minutes
+                    total_seconds = (
+                        test_data.high_priority_questions * 90 +
+                        test_data.medium_priority_questions * 60 +
+                        test_data.low_priority_questions * 45
+                    )
+                    test_data.time_limit_minutes = max(5, min(480, total_seconds // 60))
+                    test_data.total_marks = test_data.total_questions
 
             # 2. Create the test
             repo = TestRepository(db)

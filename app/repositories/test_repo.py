@@ -98,6 +98,9 @@ class TestRepository:
                 high_priority_nodes=getattr(test_data, 'high_priority_nodes', None),
                 medium_priority_nodes=getattr(test_data, 'medium_priority_nodes', None),
                 low_priority_nodes=getattr(test_data, 'low_priority_nodes', None),
+                high_priority_questions=getattr(test_data, 'high_priority_questions', None),
+                medium_priority_questions=getattr(test_data, 'medium_priority_questions', None),
+                low_priority_questions=getattr(test_data, 'low_priority_questions', None),
                 scheduled_at=None,
                 application_deadline=None,
                 assessment_deadline=None,
@@ -116,8 +119,6 @@ class TestRepository:
             await self.db.rollback()
             logger.error(f"Error creating test: {str(e)}")
             raise
-
-            result = await self.db.execute(query)
             return result.scalars().first()
 
         except Exception as e:
