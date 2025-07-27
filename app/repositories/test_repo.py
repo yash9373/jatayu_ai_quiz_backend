@@ -18,6 +18,36 @@ logger = logging.getLogger(__name__)
 
 
 class TestRepository:
+    async def update_skill_graph(self, test_id: int, skill_graph: dict, total_questions: int):
+        """Update the skill_graph and total_questions fields for a test."""
+        try:
+            query = (
+                update(Test)
+                .where(Test.test_id == test_id)
+                .values(
+                    skill_graph=json.dumps(skill_graph) if skill_graph else None,
+                    total_questions=total_questions
+                )
+            )
+            await self.db.execute(query)
+            await self.db.commit()
+            logger.info(f"Updated skill_graph for test {test_id}")
+        except Exception as e:
+            await self.db.rollback()
+            logger.error(f"Error updating skill_graph for test {test_id}: {str(e)}")
+            raise
+
+    async def get_test_by_id(self, test_id: int, created_by=None) -> Optional[Test]:
+        """Get test by ID with optional ownership check"""
+        try:
+            query = select(Test).where(Test.test_id == test_id)
+            if created_by:
+                query = query.where(Test.created_by == created_by)
+            result = await self.db.execute(query)
+            return result.scalars().first()
+        except Exception as e:
+            logger.error(f"Error getting test: {str(e)}")
+            return None
 
     async def get_live_tests(self) -> List[Test]:
         """Get tests that are currently live and need to be ended if deadline passed"""
@@ -38,13 +68,17 @@ class TestRepository:
 
     def __init__(self, db: AsyncSession):
         self.db = db
-    async def update_skill_graph(self, test_id: int, total_questions: int, question_distribution: str):
+
+    async def update_question_counts(self, test_id: int, high: int, medium: int, low: int, total_questions: int, time_limit_minutes: int):
         query = (
             update(Test)
             .where(Test.test_id == test_id)
             .values(
+                high_priority_nodes=high,
+                medium_priority_nodes=medium,
+                low_priority_nodes=low,
                 total_questions=total_questions,
-                question_distribution=question_distribution
+                time_limit_minutes=time_limit_minutes
             )
         )
         await self.db.execute(query)
@@ -61,7 +95,9 @@ class TestRepository:
                 total_questions=test_data.total_questions,
                 time_limit_minutes=test_data.time_limit_minutes,
                 total_marks=test_data.total_marks,
-                question_distribution=test_data.question_distribution if test_data.question_distribution else None,
+                high_priority_nodes=getattr(test_data, 'high_priority_nodes', None),
+                medium_priority_nodes=getattr(test_data, 'medium_priority_nodes', None),
+                low_priority_nodes=getattr(test_data, 'low_priority_nodes', None),
                 scheduled_at=None,
                 application_deadline=None,
                 assessment_deadline=None,
@@ -80,17 +116,6 @@ class TestRepository:
             await self.db.rollback()
             logger.error(f"Error creating test: {str(e)}")
             raise
-
-    async def get_test_by_id(self, test_id: int, created_by=None) -> Optional[Test]:
-        """Get test by ID with optional ownership check"""
-        try:
-            query = select(Test).options(
-                selectinload(Test.creator),
-                selectinload(Test.updater)
-            ).where(Test.test_id == test_id)
-
-            if created_by:
-                query = query.where(Test.created_by == created_by)
 
             result = await self.db.execute(query)
             return result.scalars().first()
@@ -130,9 +155,8 @@ class TestRepository:
             # Update fields
             update_data = test_data.dict(exclude_unset=True)
             for field, value in update_data.items():
-                if field == "question_distribution" and value is not None:
-                    import json
-                    test.question_distribution = json.dumps(value)
+                if field in ["high_priority_nodes", "medium_priority_nodes", "low_priority_nodes"]:
+                    setattr(test, field, value)
                 else:
                     setattr(test, field, value)
 

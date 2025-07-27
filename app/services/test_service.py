@@ -1,4 +1,4 @@
-# --- Scheduler job functions ---
+
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from app.repositories.test_repo import TestRepository
 from app.models.test import TestStatus
@@ -57,6 +57,76 @@ logger = logging.getLogger(__name__)
 
 
 class TestService:
+    async def update_test_job_description(self, test_id: int, test_data: TestUpdate, updated_by: int, db: AsyncSession) -> TestResponse:
+        """Update job description, resume_score_threshold, max_shortlisted_candidates, and auto_shortlist for a test. Skill graph will be updated if job description changes."""
+        try:
+            repo = TestRepository(db)
+            test = await repo.get_test_by_id(test_id)
+            if not test:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
+            # Check if job_description is being updated and actually changed
+            job_desc_updated = False
+            if "job_description" in test_data.dict(exclude_unset=True):
+                if test_data.job_description is not None and test_data.job_description != test.job_description:
+                    job_desc_updated = True
+            # Update fields
+            updated_test = await repo.update_test(test_id, test_data, updated_by)
+            # If job_description changed, re-run AI pipeline and update node counts
+            if job_desc_updated and updated_test.job_description:
+                parsed_jd = await self.ai_service.parse_job_description(updated_test.job_description)
+                skill_graph = await self.ai_service.generate_skill_graph(parsed_jd)
+                await repo.update_test_ai_data(updated_test.test_id, parsed_jd, skill_graph)
+                from app.services.skill_graph_generation.state import SkillGraph
+                from app.services.skill_graph_generation.graph import count_nodes_by_priority
+                if skill_graph and isinstance(skill_graph, dict) and "root_nodes" in skill_graph:
+                    node_counts = count_nodes_by_priority(SkillGraph.model_validate(skill_graph))
+                    high_priority_questions = node_counts["H"] * 5
+                    medium_priority_questions = node_counts["M"] * 5
+                    low_priority_questions = node_counts["L"] * 5
+                    total_questions = high_priority_questions + medium_priority_questions + low_priority_questions
+                    total_seconds = (
+                        (high_priority_questions * 90) +
+                        (medium_priority_questions * 60) +
+                        (low_priority_questions * 45)
+                    )
+                    time_limit_minutes = max(5, min(480, total_seconds // 60))
+                    total_marks = total_questions
+                    await repo.update_skill_graph(
+                        updated_test.test_id,
+                        skill_graph,
+                        total_questions
+                    )
+                    from sqlalchemy import text
+                    await db.execute(
+                        text("""
+                        UPDATE tests SET high_priority_nodes = :h, medium_priority_nodes = :m, low_priority_nodes = :l, high_priority_questions = :hq, medium_priority_questions = :mq, low_priority_questions = :lq, total_questions = :tq, time_limit_minutes = :tlm, total_marks = :tm WHERE test_id = :tid
+                        """),
+                        {
+                            "h": node_counts["H"],
+                            "m": node_counts["M"],
+                            "l": node_counts["L"],
+                            "hq": high_priority_questions,
+                            "mq": medium_priority_questions,
+                            "lq": low_priority_questions,
+                            "tq": total_questions,
+                            "tlm": time_limit_minutes,
+                            "tm": total_marks,
+                            "tid": updated_test.test_id
+                        }
+                    )
+                    await db.commit()
+                # Refresh updated_test with new AI fields
+                updated_test = await repo.get_test_by_id(test_id)
+            creator = await self._get_user_by_id(updated_test.created_by, db)
+            return await self._format_test_response(updated_test, creator)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error updating test {test_id}: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to update test: {str(e)}"
+            )
     async def schedule_test(self, test_id: int, schedule_data: TestSchedule, updated_by: int, db: AsyncSession) -> TestResponse:
         """Schedule a test: set scheduled_at, assessment_deadline, and schedule status update jobs"""
         repo = TestRepository(db)
@@ -105,22 +175,43 @@ class TestService:
         self.notification_service = get_notification_service()
 
     async def create_test_with_ai(self, test_data: TestCreate, created_by: int, db: AsyncSession) -> TestResponse:
-        """Create a new test with AI processing"""
+        """Create a new test with AI processing and auto question distribution"""
         try:
-            # 1. Create the test first
+            # 1. If job_description is present, generate skill graph and set question fields
+            if test_data.job_description:
+                ai_service = self.ai_service
+                parsed_jd = await ai_service.parse_job_description(test_data.job_description)
+                skill_graph = await ai_service.generate_skill_graph(parsed_jd)
+                from app.services.skill_graph_generation.state import SkillGraph
+                from copy import deepcopy
+                if skill_graph and isinstance(skill_graph, dict) and "root_nodes" in skill_graph:
+                    # Count nodes by priority for new columns
+                    from app.services.skill_graph_generation.graph import count_nodes_by_priority
+                    node_counts = count_nodes_by_priority(SkillGraph.model_validate(skill_graph))
+                    test_data = deepcopy(test_data)
+                    test_data.high_priority_nodes = node_counts["H"]
+                    test_data.medium_priority_nodes = node_counts["M"]
+                    test_data.low_priority_nodes = node_counts["L"]
+                    test_data.total_questions = (
+                        node_counts["H"] * 5 +
+                        node_counts["M"] * 5 +
+                        node_counts["L"] * 5
+                    )
+
+            # 2. Create the test
             repo = TestRepository(db)
             test = await repo.create_test(test_data, created_by)
 
-            # 2. Get creator info for notifications
+            # 3. Get creator info for notifications
             creator = await self._get_user_by_id(created_by, db)
 
-            # 3. Process job description with AI if provided
+            # 4. Process job description with AI if provided (update test with AI data)
             if test_data.job_description:
                 await self._process_job_description_with_ai(test, creator, db)
                 # Fetch updated test data after AI processing
                 test = await repo.get_test_by_id(test.test_id)
 
-            # 4. Return test response
+            # 5. Return test response
             return await self._format_test_response(test, creator)
 
         except Exception as e:
@@ -424,11 +515,30 @@ class TestService:
             # Update the test
             updated_test = await repo.update_test(test_id, test_data, updated_by)
 
-            # If job_description changed, re-run AI pipeline
+            # If job_description changed, re-run AI pipeline and update node counts
             if job_desc_updated and updated_test.job_description:
                 parsed_jd = await self.ai_service.parse_job_description(updated_test.job_description)
                 skill_graph = await self.ai_service.generate_skill_graph(parsed_jd)
                 await repo.update_test_ai_data(updated_test.test_id, parsed_jd, skill_graph)
+                # Also update node counts in the test table
+                from app.services.skill_graph_generation.state import SkillGraph
+                from app.services.skill_graph_generation.graph import count_nodes_by_priority
+                if skill_graph and isinstance(skill_graph, dict) and "root_nodes" in skill_graph:
+                    node_counts = count_nodes_by_priority(SkillGraph.model_validate(skill_graph))
+                    await repo.update_skill_graph(
+                        updated_test.test_id,
+                        skill_graph,
+                        updated_test.total_questions
+                    )
+                    # Directly update node count columns
+                    from sqlalchemy import text
+                    await db.execute(
+                        text("""
+                        UPDATE tests SET high_priority_nodes = :h, medium_priority_nodes = :m, low_priority_nodes = :l WHERE test_id = :tid
+                        """),
+                        {"h": node_counts["H"], "m": node_counts["M"], "l": node_counts["L"], "tid": updated_test.test_id}
+                    )
+                    await db.commit()
                 # Refresh updated_test with new AI fields
                 updated_test = await repo.get_test_by_id(test_id)
 
@@ -547,7 +657,13 @@ class TestService:
             creator_name=creator.name if creator else None,
             creator_role=creator.role.value if creator else None,
             total_candidates=total_candidates,
-            duration=duration
+            duration=duration,
+            high_priority_questions=getattr(test, 'high_priority_questions', None),
+            medium_priority_questions=getattr(test, 'medium_priority_questions', None),
+            low_priority_questions=getattr(test, 'low_priority_questions', None),
+            high_priority_nodes=getattr(test, 'high_priority_nodes', None),
+            medium_priority_nodes=getattr(test, 'medium_priority_nodes', None),
+            low_priority_nodes=getattr(test, 'low_priority_nodes', None)
         )
 
 

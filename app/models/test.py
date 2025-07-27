@@ -47,9 +47,17 @@ class Test(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     
-    # Question distribution (HML)
-    from sqlalchemy import JSON
-    question_distribution = Column(JSON, nullable=True)  # Store as native JSON
+
+
+    # Per-priority question counts (NEW)
+    high_priority_questions = Column(Integer, nullable=True, default=0)
+    medium_priority_questions = Column(Integer, nullable=True, default=0)
+    low_priority_questions = Column(Integer, nullable=True, default=0)
+
+    # H, M, L node counts
+    high_priority_nodes = Column(Integer, nullable=True, default=0)
+    medium_priority_nodes = Column(Integer, nullable=True, default=0)
+    low_priority_nodes = Column(Integer, nullable=True, default=0)
 
     # Relationships
     creator = relationship("User", foreign_keys=[created_by])

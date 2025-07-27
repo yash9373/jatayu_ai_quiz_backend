@@ -1,26 +1,27 @@
 from pydantic import BaseModel
 
-class SkillGraphUpdate(BaseModel):
+class QuestionCountUpdate(BaseModel):
+    high_priority_questions: int
+    medium_priority_questions: int
+    low_priority_questions: int
     total_questions: int
-    high: int
-    medium: int
-    low: int
+    time_limit_minutes: int
 from fastapi import Body
 import json
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
-from app.services.test_service import TestService, get_enhanced_test_service
+from app.services.test_service import get_enhanced_test_service
 from app.services.auth.auth_service import get_current_user
 from app.schemas.test_schema import TestCreate, TestUpdate, TestResponse, TestSummary
 from app.db.database import get_db
 from app.models.user import User, UserRole
-from app.schemas.test_schema import TestSchedule
+
 from app.repositories.test_repo import TestRepository
 
 router = APIRouter()
-test_service = TestService()
-enhanced_test_service = get_enhanced_test_service()
+test_service = get_enhanced_test_service()
+
 
 def recruiter_required(current_user: User = Depends(get_current_user)):
     """Dependency to ensure only recruiters can access certain endpoints"""
@@ -35,35 +36,22 @@ def recruiter_required(current_user: User = Depends(get_current_user)):
 from app.schemas.test_schema import TestSchedule
 
 
-@router.put("/{test_id}/update-skill-graph")
-async def update_skill_graph(
+
+# New endpoint for updating per-priority question counts and total
+@router.put("/{test_id}/update-question-counts")
+async def update_question_counts(
     test_id: int,
-    data: SkillGraphUpdate,
+    data: QuestionCountUpdate,
     current_user: User = Depends(recruiter_required),
     db: AsyncSession = Depends(get_db)
 ):
-    """Update total_questions and question_distribution for a test (MVC, repository pattern)"""
-    # Extract values from validated Pydantic model
-    total_questions = data.total_questions
-    question_distribution = json.dumps({
-        "high": data.high,
-        "medium": data.medium,
-        "low": data.low
-    })
-    # Use repository to update test
-    repo = TestRepository(db)
-    test = await repo.get_test_by_id(test_id)
-    if not test:
-        raise HTTPException(status_code=404, detail="Test not found")
-    if test.created_by != current_user.user_id:
-        raise HTTPException(status_code=403, detail="You can only update your own tests")
-    await repo.update_skill_graph(test_id, total_questions, question_distribution)
-    return {
-        "test_id": test_id,
-        "total_questions": total_questions,
-        "question_distribution": question_distribution,
-        "message": "Skill graph updated successfully."
-    }
+    """Update per-priority question counts, total_questions, and time_limit_minutes for a test."""
+    return await test_service.update_question_counts(
+        test_id=test_id,
+        data=data,
+        user_id=current_user.user_id,
+        db=db
+    )
 
 
 @router.post("/{test_id}/schedule", response_model=TestResponse)
@@ -88,7 +76,7 @@ async def create_test(
     db: AsyncSession = Depends(get_db)
 ):
     """Create a new test with AI processing (recruiters only)"""
-    return await enhanced_test_service.create_test_with_ai(
+    return await test_service.create_test_with_ai(
         test_data=test_data,
         created_by=current_user.user_id,
         db=db
@@ -136,7 +124,7 @@ async def update_test(
     current_user: User = Depends(recruiter_required),
     db: AsyncSession = Depends(get_db)
 ):
-    """Update a test (owner only, only in preparing)"""
+    """Update job description, resume_score_threshold, max_shortlisted_candidates, and auto_shortlist for a test (owner only, only in preparing). Skill graph will be updated if job description changes."""
     existing_test = await test_service.get_test_by_id(test_id=test_id, db=db)
     if existing_test.created_by != current_user.user_id:
         raise HTTPException(
@@ -145,7 +133,7 @@ async def update_test(
         )
     if existing_test.status != "preparing":
         raise HTTPException(status_code=403, detail="Test/job description can only be updated in 'preparing' status.")
-    return await test_service.update_test(
+    return await test_service.update_test_job_description(
         test_id=test_id,
         test_data=test_data,
         updated_by=current_user.user_id,
@@ -205,7 +193,7 @@ async def schedule_test(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Cannot reschedule a test that is already live."
         )
-    return await enhanced_test_service.schedule_test(
+    return await test_service.schedule_test(
         test_id=test_id,
         schedule_data=schedule_data,
         db=db
@@ -226,7 +214,7 @@ async def publish_test(
             detail="You can only publish your own tests"
         )
     
-    return await enhanced_test_service.publish_test(test_id=test_id, db=db)
+    return await test_service.publish_test(test_id=test_id, db=db)
 
 @router.post("/{test_id}/unpublish")
 async def unpublish_test(
@@ -243,7 +231,7 @@ async def unpublish_test(
             detail="You can only unpublish your own tests"
         )
     
-    return await enhanced_test_service.unpublish_test(test_id=test_id, db=db)
+    return await test_service.unpublish_test(test_id=test_id, db=db)
 
 @router.get("/{test_id}/status")
 async def get_test_status(
@@ -260,7 +248,7 @@ async def get_test_status(
             detail="You can only view your own test status"
         )
     
-    return await enhanced_test_service.get_test_status(test_id=test_id, db=db)
+    return await test_service.get_test_status(test_id=test_id, db=db)
 
 @router.post("/{test_id}/duplicate")
 async def duplicate_test(
@@ -277,7 +265,7 @@ async def duplicate_test(
             detail="You can only duplicate your own tests"
         )
     
-    return await enhanced_test_service.duplicate_test(
+    return await test_service.duplicate_test(
         test_id=test_id,
         created_by=current_user.user_id,
         db=db

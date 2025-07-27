@@ -1,3 +1,10 @@
+# Singleton pattern for NotificationService
+_notification_service_instance = None
+def get_notification_service():
+    global _notification_service_instance
+    if _notification_service_instance is None:
+        _notification_service_instance = NotificationService()
+    return _notification_service_instance
 """
 Notification Service - Mock email/SMS service for now
 Following Single Responsibility Principle

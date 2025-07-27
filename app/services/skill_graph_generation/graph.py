@@ -283,6 +283,27 @@ def print_skill_graph(skill_graph: SkillGraph, indent: int = 0) -> None:
         print_skill_node(node, indent)
 
 
+# Utility: Count nodes by priority and total
+def count_nodes_by_priority(skill_graph: SkillGraph):
+    """
+    Returns a dict with counts for each priority (H, M, L) and total nodes.
+    Example output: {"H": 3, "M": 5, "L": 2, "total": 10}
+    """
+    counts = {"H": 0, "M": 0, "L": 0, "total": 0}
+
+    def traverse(nodes):
+        for node in nodes:
+            prio = node.priority
+            if prio in counts:
+                counts[prio] += 1
+            counts["total"] += 1
+            if node.subskills:
+                traverse(node.subskills)
+
+    traverse(skill_graph.root_nodes)
+    return counts
+
+
 def print_skill_node(node: SkillNode, indent: int = 0) -> None:
     """Print a skill node and its subskills recursively."""
     prefix = "  " * indent

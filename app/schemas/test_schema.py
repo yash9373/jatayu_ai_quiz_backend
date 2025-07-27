@@ -23,24 +23,21 @@ class TestCreate(TestBase):
     resume_score_threshold: Optional[int] = Field(None, ge=0, le=100)
     max_shortlisted_candidates: Optional[int] = Field(None, ge=1, le=1000)
     auto_shortlist: bool = Field(..., description="Auto shortlist candidates")
-    total_questions: int = Field(..., ge=1, le=200)
-    time_limit_minutes: int = Field(..., ge=5, le=480)  # 5 min to 8 hours
-    total_marks: int = Field(..., ge=1, le=1000)
-    question_distribution: Dict[str, int] = Field(..., description="Question distribution: {low, medium, high}")
+    total_questions: Optional[int] = Field(None, ge=1, le=200)
+    time_limit_minutes: Optional[int] = Field(None, ge=5, le=480)  # 5 min to 8 hours
+    total_marks: Optional[int] = Field(None, ge=1, le=1000)
+    high_priority_nodes: Optional[int] = Field(None, description="Count of high priority nodes")
+    medium_priority_nodes: Optional[int] = Field(None, description="Count of medium priority nodes")
+    low_priority_nodes: Optional[int] = Field(None, description="Count of low priority nodes")
+    high_priority_questions: Optional[int] = Field(None, description="Count of high priority questions")
+    medium_priority_questions: Optional[int] = Field(None, description="Count of medium priority questions")
+    low_priority_questions: Optional[int] = Field(None, description="Count of low priority questions")
 
 class TestUpdate(BaseModel):
-    test_name: Optional[str] = Field(None, min_length=3, max_length=200)
-    job_description: Optional[str] = Field(None, max_length=10000)
+    job_description: str = Field(..., max_length=10000, description="Job description")
     resume_score_threshold: Optional[int] = Field(None, ge=0, le=100)
     max_shortlisted_candidates: Optional[int] = Field(None, ge=1, le=1000)
     auto_shortlist: Optional[bool] = None
-    total_questions: Optional[int] = Field(None, ge=1, le=200)
-    time_limit_minutes: Optional[int] = Field(None, ge=5, le=480)
-    total_marks: Optional[int] = Field(None, ge=1, le=1000)
-    scheduled_at: Optional[datetime] = None
-    application_deadline: Optional[datetime] = None
-    assessment_deadline: Optional[datetime] = None
-    question_distribution: Optional[Dict[str, int]] = None  # JSON object: {"low": int, "medium": int, "high": int}
 
 class TestSchedule(BaseModel):
     scheduled_at: datetime = Field(..., description="When to publish the test")
@@ -48,6 +45,12 @@ class TestSchedule(BaseModel):
     assessment_deadline: Optional[datetime] = None
 
 class TestResponse(BaseModel):
+    high_priority_questions: Optional[int] = None
+    medium_priority_questions: Optional[int] = None
+    low_priority_questions: Optional[int] = None
+    high_priority_nodes: Optional[int] = None
+    medium_priority_nodes: Optional[int] = None
+    low_priority_nodes: Optional[int] = None
     test_id: int
     test_name: str
     job_description: Optional[str]
