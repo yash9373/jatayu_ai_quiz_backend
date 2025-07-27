@@ -1,4 +1,9 @@
 
+from dotenv import load_dotenv
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from celery import Celery
+from datetime import datetime
 import asyncio
 import os
 import sys
@@ -8,12 +13,6 @@ from app.repositories.candidate_application_repo import CandidateApplicationRepo
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from datetime import datetime
-import os
-from celery import Celery
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
-from dotenv import load_dotenv
 load_dotenv()
 celery = Celery(
     "jatayu_tasks",
@@ -22,11 +21,15 @@ celery = Celery(
 )
 DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_async_engine(DATABASE_URL, future=True)
-AsyncSessionLocal = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+AsyncSessionLocal = sessionmaker(
+    engine, expire_on_commit=False, class_=AsyncSession)
+
 
 @celery.task
 def screen_resume_task(application_id, resume_link, job_description, min_resume_score=None):
     import asyncio
+    print("[Celery] Starting resume screening task for application_id:",
+          application_id)
 
     async def process():
         from app.services.ai_screening_service import AIScreeningService
@@ -34,7 +37,9 @@ def screen_resume_task(application_id, resume_link, job_description, min_resume_
         from app.models.candidate_application import CandidateApplication
         from app.models.assessment import Assessment
         import json
-        import requests, tempfile, os
+        import requests
+        import tempfile
+        import os
         from datetime import datetime
 
         service = AIScreeningService()
@@ -51,8 +56,10 @@ def screen_resume_task(application_id, resume_link, job_description, min_resume_
                         return "Error: Invalid Google Drive link."
                 else:
                     download_url = resume_link
-                print("[Celery] Downloading resume from:", download_url, flush=True)
-                response = requests.get(download_url, timeout=30, allow_redirects=True)
+                print("[Celery] Downloading resume from:",
+                      download_url, flush=True)
+                response = requests.get(
+                    download_url, timeout=30, allow_redirects=True)
                 response.raise_for_status()
                 # Save to temp file (preserve extension if possible)
                 ext = os.path.splitext(download_url)[-1] or '.pdf'
@@ -60,13 +67,15 @@ def screen_resume_task(application_id, resume_link, job_description, min_resume_
                     tmp_file.write(response.content)
                     tmp_file_path = tmp_file.name
                 resume_text = service.extract_text_from_file(tmp_file_path)
-                print("[Celery] Extracted resume text:", resume_text[:100], flush=True)
+                print("[Celery] Extracted resume text:",
+                      resume_text[:100], flush=True)
                 os.remove(tmp_file_path)
             except Exception as e:
                 resume_text = f"Error downloading or extracting resume: {e}"
             if not resume_text:
                 return "Error: Resume text is empty or invalid."
-            screening_result = service.screen_resume_text(resume_text, job_description, min_resume_score=min_resume_score)
+            screening_result = service.screen_resume_text(
+                resume_text, job_description, min_resume_score=min_resume_score)
             print("[Celery] screening_result:", screening_result)
             if not screening_result:
                 return "Error: Screening result is empty or invalid."

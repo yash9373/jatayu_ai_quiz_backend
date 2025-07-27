@@ -23,6 +23,7 @@ import random
 import string
 from app.services.notification_service import NotificationService
 
+
 class CandidateApplicationService:
     async def process_bulk_applications(self, db: AsyncSession, bulk_data: CandidateApplicationBulkCreate) -> CandidateApplicationBulkResponse:
         results = []
@@ -40,6 +41,7 @@ class CandidateApplicationService:
                 results.append({"error": str(e)})
                 failed += 1
         return CandidateApplicationBulkResponse(results=results, total=len(bulk_data.applications), success=success, failed=failed)
+
     async def get_applications_summary_by_test_id(self, db: AsyncSession, test_id: int) -> List[CandidateApplicationSummaryResponse]:
         applications = await CandidateApplicationRepository.get_applications_by_test_id_with_user(db, test_id)
         response_list = []
@@ -54,10 +56,12 @@ class CandidateApplicationService:
                 "candidate_name": app.user.name if app.user else None,
                 "candidate_email": app.user.email if app.user else None,
                 "screening_status": app.screening_status,
-                
+
             }
-            response_list.append(CandidateApplicationSummaryResponse(**app_dict))
+            response_list.append(
+                CandidateApplicationSummaryResponse(**app_dict))
         return response_list
+
     def __init__(self):
         self.ai_service = AIScreeningService()
 
@@ -70,7 +74,8 @@ class CandidateApplicationService:
         user = await get_user_by_email(db, sanitized_email)
         generated_password = None
         if not user:
-            generated_password = ''.join(random.choices(string.ascii_letters + string.digits + string.punctuation, k=12))
+            generated_password = ''.join(random.choices(
+                string.ascii_letters + string.digits + string.punctuation, k=12))
             hashed_password = get_password_hash(generated_password)
             name = data.name or sanitized_email.split('@')[0]
             new_user = await create_user(db, name=name, email=sanitized_email, hashed_password=hashed_password, role=UserRole.candidate)
@@ -110,12 +115,31 @@ class CandidateApplicationService:
             "applied_at": datetime.utcnow(),
             "updated_at": datetime.utcnow(),
             "screening_completed_at": None,
-            "screening_status": "pending"
-        })
+            "screening_status": "pending"})
         application = await CandidateApplicationRepository.create_application(db, app_data)
+
+        print(
+            f"Creating a celery task for screening application: {application.application_id}")
+
         # Queue screening job to Celery (non-blocking)
-        from celery_app import screen_resume_task
-        screen_resume_task.delay(application.application_id, data.resume_link, test.job_description, test.resume_score_threshold if test.auto_shortlist else None)
+        try:
+            print(f"[DEBUG] Attempting to import celery_app...")
+            from celery_app import screen_resume_task
+            print(f"[DEBUG] Successfully imported screen_resume_task")
+            print(
+                f"[DEBUG] Queuing screening task for application ID: {application.application_id}")
+
+            screen_resume_task.delay(application.application_id, data.resume_link,
+                                     test.job_description, test.resume_score_threshold if test.auto_shortlist else None)
+            print(f"[DEBUG] Task queued successfully!")
+
+        except Exception as e:
+            print(f"[ERROR] Failed to import/queue celery task: {e}")
+            import traceback
+            traceback.print_exc()
+            # Continue without queuing the task
+            print(f"[WARNING] Skipping Celery task due to error")
+
         # Prepare response
         response_dict = {
             "application_id": application.application_id,

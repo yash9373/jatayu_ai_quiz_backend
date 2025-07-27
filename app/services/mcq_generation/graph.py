@@ -286,11 +286,12 @@ def generate_question(state: AgentState):
                         updated_candidate_graph.append(updated_node)
                     else:
                         updated_candidate_graph.append(node_state)
-
+                processed_nodes = state.processed_nodes + [current_node_id]
                 # Update state and clear current node
                 state = state.model_copy(deep=True, update={
                     "candidate_graph": updated_candidate_graph,
-                    "last_node_id": None
+                    "last_node_id": None,
+                    "processed_nodes": processed_nodes,
                 })
                 current_node_id = None
                 current_node_state = None

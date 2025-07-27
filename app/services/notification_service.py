@@ -9,26 +9,35 @@ def get_notification_service():
 Notification Service - Mock email/SMS service for now
 Following Single Responsibility Principle
 """
-
 import logging
-from typing import Dict, Any, List
-from datetime import datetime
-from app.models.user import User
+from sendgrid.helpers.mail import Mail, Email, To, Content
+import ssl
+import os
+import sendgrid
 from app.models.test import Test
+from app.models.user import User
+from datetime import datetime
+from typing import Dict, Any, List
+_notification_service_instance = None
+
+
+def get_notification_service():
+    global _notification_service_instance
+    if _notification_service_instance is None:
+        _notification_service_instance = NotificationService()
+    return _notification_service_instance
+
 
 # NotificationService class for sending emails
-import sendgrid
-import os
-import ssl
-from sendgrid.helpers.mail import Mail, Email, To, Content
-
 ssl._create_default_https_context = ssl._create_unverified_context
+
 
 class NotificationService:
     def __init__(self):
         api_key = os.environ.get("SENDGRID_API_KEY")
         self.sg = sendgrid.SendGridAPIClient(api_key=api_key)
-        self.from_email = Email("kolheyashodip8@gmail.com")  # Use your verified sender email
+        # Use your verified sender email
+        self.from_email = Email("kolheyashodip8@gmail.com")
 
     def send_email(self, to_email: str, subject: str, html_content: str) -> int:
         to = To(to_email)
