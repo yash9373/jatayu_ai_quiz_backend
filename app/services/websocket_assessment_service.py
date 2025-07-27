@@ -25,6 +25,17 @@ from app.services.mcq_generation.graph import get_question_generation_graph
 logger = logging.getLogger(__name__)
 
 
+class StateEncoder(json.JSONEncoder):
+    def default(self, o):
+        if hasattr(o, 'model_dump'):
+            return o.model_dump()
+        elif hasattr(o, 'dict'):
+            return o.dict()
+        elif isinstance(o, datetime):
+            return o.isoformat()
+        return str(o)
+
+
 class AssessmentGraphService:
     """
     Service for managing MCQ generation graph in WebSocket assessments
@@ -294,6 +305,9 @@ class AssessmentGraphService:
             processed_nodes = updated_state.values.get("processed_nodes", [])
 
             total_nodes = len(node_queue) + len(processed_nodes)
+            last_node = updated_state.values.get("last_node", None)
+            if last_node:
+                total_nodes += 1
             completed_nodes = len(processed_nodes)
             progress = (completed_nodes / total_nodes) * 100
 
@@ -406,14 +420,14 @@ class AssessmentGraphService:
             )
 
             state = await graph.aget_state(config)
+            serialized_state = json.loads(
+                json.dumps(state.values, cls=StateEncoder))
             if not state.values:
                 logger.error(f"No state found for thread {thread_id}")
                 return None
-
             return {
-                "state": state.values,
+                "state": serialized_state
             }
-
         except Exception as e:
             logger.error(
                 f"Error getting assessment state for thread {thread_id}: {str(e)}")
