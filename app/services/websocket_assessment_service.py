@@ -212,7 +212,15 @@ class AssessmentGraphService:
                 return None
 
             # Get the latest question
-            latest_question_id = max(generated_questions.keys())
+            question_queue = updated_state.values.get(
+                "question_queue", [])
+
+            if not question_queue:
+                logger.warning(
+                    f"No questions in queue for thread {thread_id}")
+                return None
+
+            latest_question_id = question_queue[0]
             latest_question = generated_questions[latest_question_id]
 
             return {
@@ -285,7 +293,7 @@ class AssessmentGraphService:
             node_queue = updated_state.values.get("node_queue", [])
             processed_nodes = updated_state.values.get("processed_nodes", [])
 
-            total_nodes = len(node_queue)
+            total_nodes = len(node_queue) + len(processed_nodes)
             completed_nodes = len(processed_nodes)
             progress = (completed_nodes / total_nodes) * 100
 

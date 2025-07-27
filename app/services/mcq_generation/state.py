@@ -115,9 +115,9 @@ class AgentState(BaseModel):
         default_factory=list,
         description="Queue of node IDs to be processed next in the skill graph"
     )
-    processed_nodes: List[Tuple[str, GraphNodeState]] = Field(
+    processed_nodes: List[str] = Field(
         default_factory=list,
-        description="List of processed nodes with their states"
+        description="List of processed nodes"
     )
     last_node_id: Optional[str] = Field(
         default=None,
