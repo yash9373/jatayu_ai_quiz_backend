@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, DateTime, String, Float, Text, ForeignKey
+from sqlalchemy import Column, Integer, DateTime, String, Float, Text, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from app.db.base import Base
 from datetime import datetime
@@ -29,12 +29,14 @@ class Assessment(Base):
 
     # Timing
     start_time = Column(DateTime, nullable=True)
-    end_time = Column(DateTime, nullable=True)
-
-    # Audit fields
+    end_time = Column(DateTime, nullable=True)    # Audit fields
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow,
                         onupdate=datetime.utcnow)
+
+    # Assessment report - JSON data containing detailed results
+    # If null, indicates report has not been generated yet
+    report = Column(JSON, nullable=True)
 
     # Relationships
     application = relationship(

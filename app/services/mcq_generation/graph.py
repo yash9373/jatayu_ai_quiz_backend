@@ -1,7 +1,7 @@
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_openai import ChatOpenAI
-from app.services.mcq_generation.state import AgentState, GraphNodeState, Question, Response, UserResponse, SubmitResponsePayload, GenerateQuestionPayload, ExitPayload
+from app.services.mcq_generation.state import AgentState, GraphNodeState, Question, Response, UserResponse, SubmitResponsePayload
 from app.services.jd_parsing.state import JobDescriptionFields
 from app.services.skill_graph_generation.state import SkillGraph, SkillNode
 from typing import List, Dict, Tuple, Optional
@@ -16,25 +16,19 @@ import os
 from dotenv import load_dotenv
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 load_dotenv()
-# Add your LLM import here - replace with your actual LLM instance
-# from your_llm_module import llm
 
 
 def get_llm():
-    """Get LLM instance lazily to avoid initialization issues during import."""
     return ChatOpenAI(
         model="gpt-4o",
         temperature=0.1,
     )
 
 
-# Configuration 0.6  # 60% pass threshold
-
-# Default questions per difficulty level (can be overridden in AgentState)
 DEFAULT_QUESTIONS_PER_DIFFICULTY = {
-    "H": 5,  # High priority skills - 5 questions
-    "M": 5,  # Medium priority skills - 5 questions
-    "L": 3   # Low priority skills - 3 questions
+    "H": 5,
+    "M": 5,
+    "L": 3
 }
 
 
@@ -648,11 +642,13 @@ raw_graph = StateGraph(AgentState)
 # Add nodes to the graph
 raw_graph.add_node("initialize", initialize)
 raw_graph.add_node("generate_question", generate_question)
+
 raw_graph.add_node("interrupt_node", interrupt_node)
+raw_graph.add_node("finalize_assessment", finalize_assessment)
 # Define the flow
 raw_graph.add_edge(START, "initialize")
 raw_graph.add_edge("initialize", "interrupt_node")
-
+raw_graph.add_edge("finalize_assessment", END)
 # Global connection pool for PostgreSQL
 _connection_pool = None
 

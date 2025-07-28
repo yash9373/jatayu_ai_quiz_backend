@@ -3,17 +3,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.database import get_db
 from app.repositories.assessment_repo import AssessmentRepository
 from app.repositories.candidate_application_repo import CandidateApplicationRepository
+from app.services.assessment_service import assessment_service
 from sqlalchemy import select
 from app.models.test import Test
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
 @router.post("/tests/{test_id}/assessment/add-candidate")
 async def add_candidate_to_assessment(test_id: int, candidate_id: int, db: AsyncSession = Depends(get_db)):
     repo = AssessmentRepository(db)
     # Check if already exists
     existing = await repo.get_assessment_by_test_and_candidate(test_id, candidate_id)
     if existing:
-        raise HTTPException(status_code=400, detail="Candidate already added to assessment for this test.")
+        raise HTTPException(
+            status_code=400, detail="Candidate already added to assessment for this test.")
     assessment = await repo.create_assessment(test_id=test_id, candidate_id=candidate_id)
     return {
         "assessment_id": assessment.assessment_id,
@@ -22,15 +29,10 @@ async def add_candidate_to_assessment(test_id: int, candidate_id: int, db: Async
         "created_at": assessment.created_at,
         "message": "Candidate successfully added to assessment."
     }
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.repositories.assessment_repo import AssessmentRepository
-from app.db.database import get_db
-from sqlalchemy import select
-from app.models.test import Test
 
 router = APIRouter()
+
 
 @router.post("/{test_id}/shortlisted/assessments")
 async def add_shortlisted_to_assessments(test_id: int, db: AsyncSession = Depends(get_db)):
@@ -38,13 +40,15 @@ async def add_shortlisted_to_assessments(test_id: int, db: AsyncSession = Depend
     shortlisted_apps = [app for app in applications if app.is_shortlisted]
     count = len(shortlisted_apps)
     if count == 0:
-        raise HTTPException(status_code=404, detail="No shortlisted candidates found.")
+        raise HTTPException(
+            status_code=404, detail="No shortlisted candidates found.")
     await AssessmentRepository.bulk_create_assessments(db, shortlisted_apps, test_id)
     return {
         "test_id": test_id,
         "shortlisted_count": count,
         "message": f"{count} shortlisted candidates added to assessments table."
     }
+
 
 @router.get("/candidates/{candidate_id}/assessments")
 async def get_assessments_for_candidate(candidate_id: int, db: AsyncSession = Depends(get_db)):
@@ -66,3 +70,138 @@ async def get_assessments_for_candidate(candidate_id: int, db: AsyncSession = De
             "status": test.status if test else None
         })
     return response
+
+
+@router.post("/assessments/{assessment_id}/generate-report")
+async def generate_assessment_report(assessment_id: int, db: AsyncSession = Depends(get_db)):
+    """Generate assessment report endpoint"""
+    try:
+        result = await assessment_service.generate_assessment_report(assessment_id, db)
+
+        return {
+            "success": True,
+            "data": result
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except NotImplementedError as e:
+        raise HTTPException(status_code=501, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to generate report: {str(e)}")
+
+
+@router.get("/assessments/{assessment_id}/report")
+async def get_assessment_report(assessment_id: int, db: AsyncSession = Depends(get_db)):
+    """Get assessment report endpoint"""
+    try:
+        result = await assessment_service.get_assessment_report(assessment_id, db)
+
+        if result is None:
+            raise HTTPException(
+                status_code=404, detail="Assessment or report not found")
+
+        return {
+            "success": True,
+            "data": result
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to retrieve report: {str(e)}")
+
+
+@router.get("/{test_id}/assessments")
+async def get_assessments_by_test_id(test_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    Get all assessments for a specific test ID with candidate information
+
+    Returns:
+        List of assessments with candidate details including:
+        - candidate name and email
+        - assessment status
+        - percentage score
+        - time taken
+        - timestamps
+    """
+    try:
+        repo = AssessmentRepository(db)
+        assessments = await repo.get_assessments_by_test_id(test_id)
+
+        if not assessments:
+            return {
+                "test_id": test_id,
+                "total_assessments": 0,
+                "assessments": [],
+                "message": "No assessments found for this test"
+            }
+
+        # Format the response for frontend table display
+        formatted_assessments = []
+        for assessment in assessments:
+            # Format time taken for display
+            time_taken_display = None
+            if assessment["time_taken_seconds"]:
+                minutes = int(assessment["time_taken_seconds"] // 60)
+                seconds = int(assessment["time_taken_seconds"] % 60)
+                time_taken_display = f"{minutes}m {seconds}s"
+
+            # Format percentage score
+            score_display = f"{assessment['percentage_score']:.1f}%" if assessment['percentage_score'] is not None else "N/A"
+
+            formatted_assessment = {
+                "assessment_id": assessment["assessment_id"],
+                "candidate_id": assessment["candidate_id"],
+                "candidate_name": assessment["candidate_name"],
+                "candidate_email": assessment["candidate_email"],
+                "status": assessment["status"],
+                "percentage_score": assessment["percentage_score"],
+                "score_display": score_display,
+                "time_taken_seconds": assessment["time_taken_seconds"],
+                "time_taken_display": time_taken_display,
+                "start_time": assessment["start_time"],
+                "end_time": assessment["end_time"],
+                "created_at": assessment["created_at"],
+                "updated_at": assessment["updated_at"]
+            }
+            formatted_assessments.append(formatted_assessment)
+
+        # Sort by status priority (completed > in_progress > not_started) and then by score
+        def sort_key(assessment):
+            status_priority = {
+                "completed": 0,
+                "in_progress": 1,
+                "not_started": 2
+            }
+            return (
+                status_priority.get(assessment["status"], 3),
+                # Negative for descending order
+                -(assessment["percentage_score"] or 0)
+            )
+
+        formatted_assessments.sort(key=sort_key)
+
+        return {
+            "test_id": test_id,
+            "total_assessments": len(formatted_assessments),
+            "assessments": formatted_assessments,
+            "summary": {
+                "completed": len([a for a in formatted_assessments if a["status"] == "completed"]),
+                "in_progress": len([a for a in formatted_assessments if a["status"] == "in_progress"]),
+                "not_started": len([a for a in formatted_assessments if a["status"] == "not_started"]),
+                "average_score": sum([a["percentage_score"] for a in formatted_assessments if a["percentage_score"] is not None]) / len([a for a in formatted_assessments if a["percentage_score"] is not None]) if any(a["percentage_score"] is not None for a in formatted_assessments) else None
+            }
+        }
+
+    except Exception as e:
+        logger.error(
+            f"Error fetching assessments for test {test_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch assessments: {str(e)}"
+        )
