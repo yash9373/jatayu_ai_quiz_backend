@@ -64,3 +64,12 @@ class NotificationService:
         if extra_info:
             html_content += f"<p>{extra_info}</p>"
         return self.send_email(to_email, subject, html_content)
+
+    def notify_test_deleted(self, test_name: str, test_id: int, recruiter_email: str) -> int:
+        subject = "Test Deleted Notification"
+        html_content = f"""
+            <p>Hello,</p>
+            <p>The test <b>{test_name}</b> (ID: {test_id}) has been deleted from your account.</p>
+            <p>If this was not intended, please contact support.</p>
+        """
+        return self.send_email(recruiter_email, subject, html_content)

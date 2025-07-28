@@ -48,6 +48,14 @@ class AssessmentRepository:
 
             # Get the actual ID value from the refreshed object
             assessment_id = getattr(assessment, 'assessment_id')
+            from app.services.logging import log_major_event
+            await log_major_event(
+                action="assessment_created",
+                status="success",
+                user=str(user_id),
+                details=f"Assessment instance created for test {test_id} and user {user_id}.",
+                entity=str(assessment_id)
+            )
             logger.info(
                 f"Created assessment instance {assessment_id} for user {user_id}, test {test_id}")
             return assessment_id

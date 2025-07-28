@@ -23,7 +23,7 @@ async def process_single_application(
 ):
     if current_user.role != UserRole.recruiter:
         raise HTTPException(status_code=403, detail="Only recruiters can access this endpoint.")
-    result = await service.process_single_application(db, data)
+    result = await service.process_single_application(db, data, current_user)
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
@@ -63,6 +63,14 @@ async def delete_application(
     deleted = await CandidateApplicationRepository.delete_application(db, application_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Application not found")
+    from app.services.logging import log_major_event
+    await log_major_event(
+        action="candidate_application_deleted",
+        status="success",
+        user=str(current_user.user_id),
+        details=f"Candidate application {application_id} deleted.",
+        entity=str(application_id)
+    )
     return {"message": "Application deleted successfully."}
 
 @router.get("/test/{test_id}", response_model=List[CandidateApplicationSummaryResponse])

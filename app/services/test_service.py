@@ -251,7 +251,16 @@ class TestService:
                 # Fetch updated test data after AI processing
                 test = await repo.get_test_by_id(test.test_id)
 
-            # 5. Return test response
+            # 5. Log major event
+            from app.services.logging import log_major_event
+            await log_major_event(
+                action="test_created",
+                status="success",
+                user=str(created_by),
+                details=f"Test '{test.test_name}' created.",
+                entity=str(test.test_id)
+            )
+            # 6. Return test response
             return await self._format_test_response(test, creator)
 
         except Exception as e:
@@ -619,12 +628,20 @@ class TestService:
             await repo.delete_test(test_id)
 
             # Send notification
-            await self.notification_service.notify_test_deleted(
+            self.notification_service.notify_test_deleted(
                 test_name=test.test_name,
                 test_id=test_id,
                 recruiter_email=creator.email
             )
 
+            from app.services.logging import log_major_event
+            await log_major_event(
+                action="test_deleted",
+                status="success",
+                user=str(test.created_by),
+                details=f"Test {test.test_name} deleted.",
+                entity=str(test_id)
+            )
             return {"message": "Test deleted successfully"}
 
         except HTTPException:

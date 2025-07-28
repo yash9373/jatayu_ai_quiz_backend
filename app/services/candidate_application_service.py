@@ -22,16 +22,17 @@ from app.core.security import get_password_hash
 import random
 import string
 from app.services.notification_service import NotificationService
+from app.services.auth.auth_service import get_current_user
 
 
 class CandidateApplicationService:
-    async def process_bulk_applications(self, db: AsyncSession, bulk_data: CandidateApplicationBulkCreate) -> CandidateApplicationBulkResponse:
+    async def process_bulk_applications(self, db: AsyncSession, bulk_data: CandidateApplicationBulkCreate, current_user: User = None) -> CandidateApplicationBulkResponse:
         results = []
         success = 0
         failed = 0
         for app in bulk_data.applications:
             try:
-                result = await self.process_single_application(db, app)
+                result = await self.process_single_application(db, app, current_user)
                 if "error" in result:
                     failed += 1
                 else:
@@ -67,7 +68,7 @@ class CandidateApplicationService:
 
     # ...existing code for __init__ ...
 
-    async def process_single_application(self, db: AsyncSession, data: CandidateApplicationCreate) -> Dict[str, Any]:
+    async def process_single_application(self, db: AsyncSession, data: CandidateApplicationCreate, current_user: User = None) -> Dict[str, Any]:
         # Check or create user by email
         sanitized_email = data.email.replace("mailto:", "")
         print(f"[DEBUG] Using sanitized email: {sanitized_email}")
@@ -117,6 +118,19 @@ class CandidateApplicationService:
             "screening_completed_at": None,
             "screening_status": "pending"})
         application = await CandidateApplicationRepository.create_application(db, app_data)
+        if current_user:
+            print(f"[DEBUG] Logging candidate application creation: actor_id={current_user.user_id}, role={getattr(current_user, 'role', None)}")
+        else:
+            print(f"[DEBUG] Logging candidate application creation: actor_id={user_id} (no current_user)")
+        from app.services.logging import log_major_event
+        actor_id = str(current_user.user_id) if current_user else str(user_id)
+        await log_major_event(
+            action="candidate_application_created",
+            status="success",
+            user=actor_id,
+            details=f"Candidate application created for test {application.test_id}.",
+            entity=str(application.application_id)
+        )
 
         print(
             f"Creating a celery task for screening application: {application.application_id}")
@@ -217,6 +231,14 @@ class CandidateApplicationService:
                     except Exception:
                         pass
         await db.commit()
+        from app.services.logging import log_major_event
+        await log_major_event(
+            action="candidate_screening_done",
+            status="success",
+            user="system",
+            details=f"Bulk candidate screening done for test {test_id}.",
+            entity=str(test_id)
+        )
         return {
             "shortlisted": shortlisted,
             "notified": notified_count,
