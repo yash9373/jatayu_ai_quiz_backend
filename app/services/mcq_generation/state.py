@@ -83,11 +83,6 @@ class GraphNodeState(BaseModel):
     )
 
 
-class HistoryPair(BaseModel):
-    question: Question
-    response: Response
-
-
 class AgentState(BaseModel):
     parsed_jd: JobDescriptionFields
     parsed_resume: ResumeFields
@@ -131,8 +126,7 @@ class AgentState(BaseModel):
     # Global Metrics
     total_questions_asked: int = Field(
         default=0,
-        description="Total number of questions asked across all nodes"
-    )
+        description="Total number of questions asked across all nodes")
     overall_score: float = Field(
         default=0.0,
         description="Overall score of the candidate based on responses"
@@ -141,9 +135,12 @@ class AgentState(BaseModel):
         default=None,
         description="Timestamp when the evaluation started"
     )
+    questions_per_difficulty: Optional[Dict[str, int]] = Field(
+        default=None,
+        description="Configuration for number of questions per priority level (H/M/L). If not provided, uses default values."
+    )
 
-    # for recent context
-    recent_history: List[HistoryPair] = Field(
-        default_factory=list,
-        description="Recent history of node evaluations for tracking progress"
+    finalized: bool = Field(
+        default=False,
+        description="Flag to indicate if the agent state has been finalized"
     )
