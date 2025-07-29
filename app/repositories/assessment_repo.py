@@ -2,13 +2,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import insert, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from app.models.assessment import Assessment
-from datetime import datetime
-from typing import Optional, Dict, Any, List
-import logging
-from sqlalchemy import insert, select, update
-from sqlalchemy.exc import SQLAlchemyError
-from app.models.assessment import Assessment
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 import logging
 
@@ -44,8 +38,8 @@ class AssessmentRepository:
                 user_id=user_id,
                 test_id=test_id,
                 status="in_progress",  # Default status when assessment is created
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc)
             )
 
             self.db.add(assessment)
@@ -123,12 +117,11 @@ class AssessmentRepository:
         Returns:
             bool: True if update was successful, False otherwise
         """
-        try:
-            # Prepare update values
+        try:            # Prepare update values
             update_values = {
                 "status": status,
                 "percentage_score": percentage_score,
-                "updated_at": datetime.utcnow()
+                "updated_at": datetime.now(timezone.utc)
             }
 
             # Add end_time if provided
@@ -158,7 +151,7 @@ class AssessmentRepository:
             application_id=application_id,
             user_id=user_id,
             test_id=test_id,
-            created_at=datetime.utcnow()
+            created_at=datetime.now(timezone.utc)
         )
         await db.execute(stmt)
         await db.commit()
@@ -292,13 +285,12 @@ class AssessmentRepository:
         Returns:
             bool: True if update successful, False otherwise
         """
-        try:
-            # Update assessment record with report data
+        try:            # Update assessment record with report data
             stmt = update(Assessment).where(
                 Assessment.assessment_id == assessment_id
             ).values(
                 report=report_data,
-                updated_at=datetime.utcnow()
+                updated_at=datetime.now(timezone.utc)
             )
 
             result = await self.db.execute(stmt)

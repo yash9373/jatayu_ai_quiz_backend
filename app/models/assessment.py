@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, DateTime, String, Float, Text, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from app.db.base import Base
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 
@@ -24,14 +24,16 @@ class Assessment(Base):
                      nullable=False)    # Assessment status and progress
     status = Column(String(20), default=AssessmentStatus.IN_PROGRESS.value)
 
-    percentage_score = Column(Float, nullable=True)
+    percentage_score = Column(Float, nullable=True)    # Timing
+    start_time = Column(DateTime(timezone=True), nullable=True)
+    end_time = Column(DateTime(timezone=True), nullable=True)
 
-    # Timing
-    start_time = Column(DateTime, nullable=True)
-    end_time = Column(DateTime, nullable=True)    # Audit fields
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow,
-                        onupdate=datetime.utcnow)
+    # Audit fields
+    created_at = Column(DateTime(timezone=True),
+                        default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True),
+                        default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
 
     # Assessment report - JSON data containing detailed results
     # If null, indicates report has not been generated yet
