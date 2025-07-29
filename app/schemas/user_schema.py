@@ -1,7 +1,19 @@
+from datetime import date, datetime
 from pydantic import BaseModel, EmailStr, validator, Field
+from typing import Optional
 from app.models.user import UserRole
 import re
 
+class UserPublic(BaseModel):
+    user_id: int
+    name: str
+    email: str
+    role: UserRole
+    created_at: Optional[datetime]
+    updated_at: Optional[datetime]
+
+    class Config:
+        orm_mode = True
 class UserLogin(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=1, max_length=255)

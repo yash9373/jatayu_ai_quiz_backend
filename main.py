@@ -5,7 +5,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router
 from app.db.database import engine
 from app.db.base import Base
-import asyncio
 from dotenv import load_dotenv
 load_dotenv()
 
