@@ -32,3 +32,11 @@ async def on_startup():
         await conn.run_sync(Base.metadata.create_all)
 
 app.include_router(router)
+
+@app.get("/")
+async def root():
+    return {"status": "healthy", "message": "Jatayu AI Quiz Backend is running"}
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
