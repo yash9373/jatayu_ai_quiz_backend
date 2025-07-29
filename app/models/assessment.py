@@ -20,10 +20,9 @@ class Assessment(Base):
     application_id = Column(Integer, ForeignKey(
         "candidate_applications.application_id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
-    test_id = Column(Integer, ForeignKey("tests.test_id"), nullable=False)
-
-    # Assessment status and progress
-    status = Column(String(20), default=AssessmentStatus.STARTED.value)
+    test_id = Column(Integer, ForeignKey("tests.test_id"),
+                     nullable=False)    # Assessment status and progress
+    status = Column(String(20), default=AssessmentStatus.IN_PROGRESS.value)
 
     percentage_score = Column(Float, nullable=True)
 

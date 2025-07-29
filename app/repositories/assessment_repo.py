@@ -38,12 +38,12 @@ class AssessmentRepository:
         Returns:
             assessment_id if successful, None otherwise
         """
-        try:
-            # Create new assessment instance
+        try:            # Create new assessment instance
             assessment = Assessment(
                 application_id=application_id,
                 user_id=user_id,
                 test_id=test_id,
+                status="in_progress",  # Default status when assessment is created
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow()
             )
@@ -193,9 +193,7 @@ class AssessmentRepository:
 
         Args:
             user_id: User ID to check
-            test_id: Test ID to check
-
-        Returns:
+            test_id: Test ID to check        Returns:
             bool: True if user has a completed assessment, False otherwise
         """
         try:
@@ -377,8 +375,7 @@ class AssessmentRepository:
                 )
                 .select_from(Assessment)
                 .join(User, Assessment.user_id == User.user_id)
-                .join(CandidateApplication, Assessment.application_id == CandidateApplication.application_id)
-                .where(Assessment.test_id == test_id)
+                .join(CandidateApplication, Assessment.application_id == CandidateApplication.application_id)                .where(Assessment.test_id == test_id)
             )
 
             result = await self.db.execute(query)
@@ -397,7 +394,8 @@ class AssessmentRepository:
                     "candidate_id": row.user_id,
                     "candidate_name": row.name,
                     "candidate_email": row.email,
-                    "status": row.status or "not_started",
+                    # Default to in_progress since assessment exists
+                    "status": row.status or "in_progress",
                     "percentage_score": row.percentage_score,
                     "start_time": row.start_time,
                     "end_time": row.end_time,
@@ -414,3 +412,139 @@ class AssessmentRepository:
             logger.error(
                 f"Error fetching assessments for test {test_id}: {str(e)}")
             return []
+
+    async def get_assessments_by_test_id_paginated(
+        self,
+        test_id: int,
+        skip: int = 0,
+        limit: int = 10,
+        status_filter: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Get paginated assessments for a specific test ID with candidate information
+
+        Args:
+            test_id: Test ID to get assessments for
+            skip: Number of records to skip (offset)
+            limit: Maximum number of records to return
+            status_filter: Optional filter by assessment status        Returns:
+            Dictionary containing paginated assessment data and metadata
+        """
+        try:
+            from app.models.user import User
+            from app.models.candidate_application import CandidateApplication
+            from sqlalchemy import func, desc, case
+
+            # Base query for assessments with candidate information
+            base_query = (
+                select(
+                    Assessment.assessment_id,
+                    Assessment.status,
+                    Assessment.percentage_score,
+                    Assessment.start_time,
+                    Assessment.end_time,
+                    Assessment.created_at,
+                    Assessment.updated_at,
+                    User.user_id,
+                    User.name,
+                    User.email,
+                    CandidateApplication.application_id
+                )
+                .select_from(Assessment)
+                .join(User, Assessment.user_id == User.user_id)
+                .join(CandidateApplication, Assessment.application_id == CandidateApplication.application_id)
+                .where(Assessment.test_id == test_id)
+            )
+
+            # Apply status filter if provided
+            if status_filter:
+                base_query = base_query.where(
+                    Assessment.status == status_filter)
+              # Count total records
+            count_query = select(func.count()).select_from(
+                base_query.subquery()
+            )
+            total_result = await self.db.execute(count_query)
+            total_count = total_result.scalar() or 0
+
+            # Apply pagination and ordering
+            paginated_query = (
+                base_query                .order_by(
+                    # Order by status priority: completed, in_progress
+                    case(
+                        (Assessment.status == 'completed', 1),
+                        (Assessment.status == 'in_progress', 2),
+                        else_=3
+                    ),
+                    # Then by score descending
+                    desc(Assessment.percentage_score),
+                    desc(Assessment.created_at)  # Then by creation time
+                )
+                .offset(skip)
+                .limit(limit))
+
+            result = await self.db.execute(paginated_query)
+            rows = result.fetchall()
+
+            assessments = []
+            for row in rows:
+                # Calculate time taken if both start and end times are available
+                time_taken = None
+                if row.start_time and row.end_time:
+                    time_taken = (
+                        row.end_time - row.start_time).total_seconds()
+
+                assessment_data = {
+                    "assessment_id": row.assessment_id,
+                    "candidate_id": row.user_id,
+                    "candidate_name": row.name,
+                    "candidate_email": row.email,
+                    # Default to in_progress since assessment exists
+                    "status": row.status or "in_progress",
+                    "percentage_score": row.percentage_score,
+                    "start_time": row.start_time,
+                    "end_time": row.end_time,
+                    "time_taken_seconds": time_taken,
+                    "created_at": row.created_at,
+                    "updated_at": row.updated_at,
+                    "application_id": row.application_id
+                }
+                assessments.append(assessment_data)
+
+            # Calculate pagination metadata
+            total_pages = (total_count + limit -
+                           1) // limit  # Ceiling division
+            current_page = (skip // limit) + 1
+            has_next = skip + limit < total_count
+            has_previous = skip > 0
+
+            return {
+                "assessments": assessments,
+                "pagination": {
+                    "total_count": total_count,
+                    "total_pages": total_pages,
+                    "current_page": current_page,
+                    "page_size": limit,
+                    "has_next": has_next,
+                    "has_previous": has_previous,
+                    "skip": skip,
+                    "limit": limit
+                }
+            }
+
+        except Exception as e:
+            logger.error(
+                f"Error fetching paginated assessments for test {test_id}: {str(e)}")
+            return {
+                "assessments": [],
+                "pagination": {
+                    "total_count": 0,
+                    "total_pages": 0,
+                    "current_page": 1,
+                    "page_size": limit,
+                    "has_next": False,
+                    "has_previous": False,
+                    "skip": skip,
+                    "limit": limit
+                }
+            }

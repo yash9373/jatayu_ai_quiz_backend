@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.database import get_db
 from app.repositories.assessment_repo import AssessmentRepository
@@ -6,6 +6,7 @@ from app.repositories.candidate_application_repo import CandidateApplicationRepo
 from app.services.assessment_service import assessment_service
 from sqlalchemy import select
 from app.models.test import Test
+from typing import Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -117,27 +118,60 @@ async def get_assessment_report(assessment_id: int, db: AsyncSession = Depends(g
 
 
 @router.get("/{test_id}/assessments")
-async def get_assessments_by_test_id(test_id: int, db: AsyncSession = Depends(get_db)):
+async def get_assessments_by_test_id(
+    test_id: int,
+    db: AsyncSession = Depends(get_db),
+    page: int = Query(1, ge=1, description="Page number (starts from 1)"),
+    page_size: int = Query(
+        10, ge=1, le=100, description="Number of items per page"),
+    status: Optional[str] = Query(
+        None, description="Filter by assessment status (completed, in_progress)")
+):
     """
-    Get all assessments for a specific test ID with candidate information
+    Get paginated assessments for a specific test ID with candidate information
+
+    Args:
+        test_id: Test ID to get assessments for
+        page: Page number (starts from 1)
+        page_size: Number of items per page (1-100)
+        status: Optional filter by assessment status
 
     Returns:
-        List of assessments with candidate details including:
+        Paginated list of assessments with candidate details including:
         - candidate name and email
         - assessment status
         - percentage score
         - time taken
         - timestamps
+        - pagination metadata
     """
     try:
         repo = AssessmentRepository(db)
-        assessments = await repo.get_assessments_by_test_id(test_id)
+
+        # Calculate skip value for pagination
+        skip = (page - 1) * page_size
+
+        # Get paginated assessments
+        result = await repo.get_assessments_by_test_id_paginated(
+            test_id=test_id,
+            skip=skip,
+            limit=page_size,
+            status_filter=status
+        )
+
+        assessments = result["assessments"]
+        pagination_info = result["pagination"]
 
         if not assessments:
             return {
                 "test_id": test_id,
                 "total_assessments": 0,
                 "assessments": [],
+                "pagination": pagination_info,                "summary": {
+                    "completed": 0,
+                    "in_progress": 0,
+                    "average_score": None
+                },
                 "message": "No assessments found for this test"
             }
 
@@ -169,38 +203,45 @@ async def get_assessments_by_test_id(test_id: int, db: AsyncSession = Depends(ge
                 "created_at": assessment["created_at"],
                 "updated_at": assessment["updated_at"]
             }
+            # Calculate summary statistics (for current page)
             formatted_assessments.append(formatted_assessment)
+        completed_count = len(
+            [a for a in formatted_assessments if a["status"] == "completed"])
+        in_progress_count = len(
+            [a for a in formatted_assessments if a["status"] == "in_progress"])
 
-        # Sort by status priority (completed > in_progress > not_started) and then by score
-        def sort_key(assessment):
-            status_priority = {
-                "completed": 0,
-                "in_progress": 1,
-                "not_started": 2
-            }
-            return (
-                status_priority.get(assessment["status"], 3),
-                # Negative for descending order
-                -(assessment["percentage_score"] or 0)
-            )
-
-        formatted_assessments.sort(key=sort_key)
+        # Calculate average score for assessments with scores
+        scores = [a["percentage_score"]
+                  for a in formatted_assessments if a["percentage_score"] is not None]
+        average_score = sum(scores) / len(scores) if scores else None
 
         return {
             "test_id": test_id,
-            "total_assessments": len(formatted_assessments),
+            "total_assessments": pagination_info["total_count"],
             "assessments": formatted_assessments,
-            "summary": {
-                "completed": len([a for a in formatted_assessments if a["status"] == "completed"]),
-                "in_progress": len([a for a in formatted_assessments if a["status"] == "in_progress"]),
-                "not_started": len([a for a in formatted_assessments if a["status"] == "not_started"]),
-                "average_score": sum([a["percentage_score"] for a in formatted_assessments if a["percentage_score"] is not None]) / len([a for a in formatted_assessments if a["percentage_score"] is not None]) if any(a["percentage_score"] is not None for a in formatted_assessments) else None
+            "pagination": {
+                "current_page": pagination_info["current_page"],
+                "total_pages": pagination_info["total_pages"],
+                "page_size": pagination_info["page_size"],
+                "total_count": pagination_info["total_count"],
+                "has_next": pagination_info["has_next"],
+                "has_previous": pagination_info["has_previous"],
+                "next_page": pagination_info["current_page"] + 1 if pagination_info["has_next"] else None,
+                "previous_page": pagination_info["current_page"] - 1 if pagination_info["has_previous"] else None
+            },            "summary": {
+                "page_completed": completed_count,
+                "page_in_progress": in_progress_count,
+                "page_average_score": average_score,
+                "page_size": len(formatted_assessments)
+            },
+            "filters": {
+                "status": status
             }
         }
 
     except Exception as e:
         logger.error(
-            f"Error fetching assessments for test {test_id}: {str(e)}")
+            f"Error fetching paginated assessments for test {test_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch assessments: {str(e)}"
