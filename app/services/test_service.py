@@ -18,7 +18,9 @@ from app.models.user import User
 import json
 import logging
 from datetime import datetime
-
+from app.tasks import set_test_status_live, set_test_status_ended
+from datetime import datetime
+import pytz
 
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@localhost/recruitment")
@@ -173,9 +175,7 @@ class TestService:
         await db.refresh(test)
 
         # Schedule status update jobs using Celery
-        from app.tasks import set_test_status_live, set_test_status_ended
-        from datetime import datetime
-        import pytz
+
         def to_naive_utc(dt):
             if dt is None:
                 return None

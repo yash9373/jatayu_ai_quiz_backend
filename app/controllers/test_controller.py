@@ -1,11 +1,6 @@
 from pydantic import BaseModel
 
-class QuestionCountUpdate(BaseModel):
-    high_priority_questions: int
-    medium_priority_questions: int
-    low_priority_questions: int
-    total_questions: int
-    time_limit_minutes: int
+
 from fastapi import Body
 import json
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -16,12 +11,18 @@ from app.services.auth.auth_service import get_current_user
 from app.schemas.test_schema import TestCreate, TestUpdate, TestResponse, TestSummary
 from app.db.database import get_db
 from app.models.user import User, UserRole
+from app.schemas.test_schema import TestSchedule
 
 from app.repositories.test_repo import TestRepository
 
 router = APIRouter()
 test_service = get_enhanced_test_service()
-
+class QuestionCountUpdate(BaseModel):
+    high_priority_questions: int
+    medium_priority_questions: int
+    low_priority_questions: int
+    total_questions: int
+    time_limit_minutes: int
 
 def recruiter_required(current_user: User = Depends(get_current_user)):
     """Dependency to ensure only recruiters can access certain endpoints"""
@@ -33,7 +34,6 @@ def recruiter_required(current_user: User = Depends(get_current_user)):
     return current_user
 
 
-from app.schemas.test_schema import TestSchedule
 
 
 
@@ -96,7 +96,6 @@ async def get_all_tests(
         skip=skip,
         limit=limit
     )
-
 
 
 @router.get("/{test_id}", response_model=TestResponse)

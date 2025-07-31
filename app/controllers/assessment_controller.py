@@ -32,9 +32,6 @@ async def add_candidate_to_assessment(test_id: int, candidate_id: int, db: Async
     }
 
 
-router = APIRouter()
-
-
 @router.post("/{test_id}/shortlisted/assessments")
 async def add_shortlisted_to_assessments(test_id: int, db: AsyncSession = Depends(get_db)):
     applications = await CandidateApplicationRepository.get_applications_by_test_id(db, test_id)
@@ -45,7 +42,7 @@ async def add_shortlisted_to_assessments(test_id: int, db: AsyncSession = Depend
             status_code=404, detail="No shortlisted candidates found.")
     await AssessmentRepository.bulk_create_assessments(db, shortlisted_apps, test_id)
     return {
-        "test_id": test_id,
+        "test_id": test_id, 
         "shortlisted_count": count,
         "message": f"{count} shortlisted candidates added to assessments table."
     }
