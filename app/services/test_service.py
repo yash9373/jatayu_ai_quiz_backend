@@ -2,57 +2,28 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from app.repositories.test_repo import TestRepository
 from app.models.test import TestStatus
-import asyncio
 from sqlalchemy.orm import sessionmaker
 import os
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Any
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.repositories import test_repo
 from app.repositories.test_repo import TestRepository
 from app.services.ai_service import get_ai_service
 from app.services.notification_service import get_notification_service
-from app.schemas.test_schema import TestCreate, TestUpdate, TestResponse, TestSummary, TestSchedule
+from app.schemas.test_schema import TestCreate, TestUpdate, TestResponse,  TestSchedule
 from app.models.test import Test, TestStatus
 from app.models.user import User
 import json
 import logging
-from datetime import datetime
-from app.tasks import set_test_status_live, set_test_status_ended
-from datetime import datetime
-import pytz
+
+# import pytz
 
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@localhost/recruitment")
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", "postgresql+asyncpg://user:password@localhost/recruitment")
 engine = create_async_engine(DATABASE_URL, future=True)
-AsyncSessionLocal = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-
-
-async def set_test_status_live(test_id):
-    """Job: Set test status to LIVE at scheduled time."""
-    from datetime import datetime, timezone
-    try:
-        print(f"[Scheduler] set_test_status_live called for test {test_id} at {datetime.now(timezone.utc)}")
-        logger.info(f"[Scheduler] set_test_status_live called for test {test_id} at {datetime.now(timezone.utc)}")
-        async with AsyncSessionLocal() as session:
-            repo = TestRepository(session)
-            await repo.update_test_status(test_id, TestStatus.LIVE.value, is_published=True)
-            print(f"[Scheduler] Test {test_id} moved to LIVE (scheduled job)")
-        logger.info(f"[Scheduler] Triggered set_test_status_live for test {test_id}")
-    except Exception as e:
-        logger.error(f"[Scheduler] Error in set_test_status_live for test {test_id}: {e}")
-
-async def set_test_status_ended(test_id):
-    """Job: Set test status to ENDED at assessment_deadline."""
-    try:
-        async with AsyncSessionLocal() as session:
-            repo = TestRepository(session)
-            await repo.update_test_status(test_id, TestStatus.ENDED.value)
-            print(f"[Scheduler] Test {test_id} moved to ENDED (scheduled job)")
-        logger.info(f"[Scheduler] Triggered set_test_status_ended for test {test_id}")
-    except Exception as e:
-        logger.error(f"[Scheduler] Error in set_test_status_ended for test {test_id}: {e}")
-
+AsyncSessionLocal = sessionmaker(
+    engine, expire_on_commit=False, class_=AsyncSession)
 
 
 logger = logging.getLogger(__name__)
@@ -66,7 +37,8 @@ class TestService:
         if not test:
             raise HTTPException(status_code=404, detail="Test not found")
         if test.created_by != user_id:
-            raise HTTPException(status_code=403, detail="You can only update your own tests")
+            raise HTTPException(
+                status_code=403, detail="You can only update your own tests")
         high = data.high_priority_questions
         medium = data.medium_priority_questions
         low = data.low_priority_questions
@@ -82,16 +54,19 @@ class TestService:
             "time_limit_minutes": time_limit_minutes,
             "message": "Question counts and time limit updated successfully."
         }
+
     async def update_test_job_description(self, test_id: int, test_data: TestUpdate, updated_by: int, db: AsyncSession) -> TestResponse:
         """Update job description, resume_score_threshold, max_shortlisted_candidates, and auto_shortlist for a test. Skill graph will be updated if job description changes."""
         try:
             repo = TestRepository(db)
             test = await repo.get_test_by_id(test_id)
             if not test:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
             # Only allow job description update in draft state
             if test.status != TestStatus.DRAFT.value:
-                raise HTTPException(status_code=400, detail="Job description can only be updated in draft state.")
+                raise HTTPException(
+                    status_code=400, detail="Job description can only be updated in draft state.")
             # Check if job_description is being updated and actually changed
             job_desc_updated = False
             if "job_description" in test_data.dict(exclude_unset=True):
@@ -107,12 +82,14 @@ class TestService:
                 from app.services.skill_graph_generation.state import SkillGraph
                 from app.services.skill_graph_generation.graph import count_nodes_by_priority
                 if skill_graph and isinstance(skill_graph, dict) and "root_nodes" in skill_graph:
-                    node_counts = count_nodes_by_priority(SkillGraph.model_validate(skill_graph))
+                    node_counts = count_nodes_by_priority(
+                        SkillGraph.model_validate(skill_graph))
                     high_priority_questions = node_counts["H"] * 5
                     medium_priority_questions = node_counts["M"] * 3
                     low_priority_questions = node_counts["L"] * 33
 
-                    total_questions = high_priority_questions + medium_priority_questions + low_priority_questions
+                    total_questions = high_priority_questions + \
+                        medium_priority_questions + low_priority_questions
                     total_seconds = (
                         (high_priority_questions * 90) +
                         (medium_priority_questions * 60) +
@@ -156,46 +133,52 @@ class TestService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to update test: {str(e)}"
             )
-    async def schedule_test(self, test_id: int, schedule_data: TestSchedule, updated_by: int, db: AsyncSession) -> TestResponse:
-        """Schedule a test: set scheduled_at, assessment_deadline, and schedule status update jobs"""
-        repo = TestRepository(db)
-        test = await repo.get_test_by_id(test_id)
-        if not test:
-            raise HTTPException(status_code=404, detail="Test not found")
-        # Only allow scheduling if test is in draft
-        if test.status != TestStatus.DRAFT.value:
-            raise HTTPException(status_code=400, detail="Test can only be scheduled from draft state")
-        # Store the schedule dates and update status
-        test.scheduled_at = schedule_data.scheduled_at
-        test.application_deadline = schedule_data.application_deadline
-        test.assessment_deadline = schedule_data.assessment_deadline
-        test.status = TestStatus.SCHEDULED.value
-        test.updated_by = updated_by
-        await db.commit()
-        await db.refresh(test)
 
-        # Schedule status update jobs using Celery
+    # async def schedule_test(self, test_id: int, schedule_data: TestSchedule, updated_by: int, db: AsyncSession) -> TestResponse:
+    #     """Schedule a test: set scheduled_at, assessment_deadline, and schedule status update jobs"""
+    #     repo = TestRepository(db)
+    #     test = await repo.get_test_by_id(test_id)
+    #     if not test:
+    #         raise HTTPException(status_code=404, detail="Test not found")
+    #     # Only allow scheduling if test is in draft
+    #     if test.status != TestStatus.DRAFT.value:
+    #         raise HTTPException(
+    #             status_code=400, detail="Test can only be scheduled from draft state")
+    #     # Store the schedule dates and update status
+    #     test.scheduled_at = schedule_data.scheduled_at
+    #     test.application_deadline = schedule_data.application_deadline
+    #     test.assessment_deadline = schedule_data.assessment_deadline
+    #     test.status = TestStatus.SCHEDULED.value
+    #     test.updated_by = updated_by
+    #     await db.commit()
+    #     await db.refresh(test)
 
-        def to_naive_utc(dt):
-            if dt is None:
-                return None
-            if dt.tzinfo is not None:
-                return dt.astimezone(pytz.UTC).replace(tzinfo=None)
-            return dt
+    #     # Schedule status update jobs using Celery
 
-        naive_scheduled_at = to_naive_utc(test.scheduled_at)
-        naive_assessment_deadline = to_naive_utc(test.assessment_deadline)
+    #     def to_naive_utc(dt):
+    #         if dt is None:
+    #             return None
+    #         if dt.tzinfo is not None:
+    #             return dt.astimezone(pytz.UTC).replace(tzinfo=None)
+    #         return dt
 
-        if naive_scheduled_at:
-            set_test_status_live.apply_async(args=[test.test_id], eta=naive_scheduled_at)
-            logger.info(f"Scheduled set_test_status_live for test {test.test_id} at {naive_scheduled_at} (Celery)")
-        if naive_assessment_deadline:
-            set_test_status_ended.apply_async(args=[test.test_id], eta=naive_assessment_deadline)
-            logger.info(f"Scheduled set_test_status_ended for test {test.test_id} at {naive_assessment_deadline} (Celery)")
+    #     naive_scheduled_at = to_naive_utc(test.scheduled_at)
+    #     naive_assessment_deadline = to_naive_utc(test.assessment_deadline)
 
-        creator = await self._get_user_by_id(test.created_by, db)
-        return await self._format_test_response(test, creator)
-    """Test Service with AI integration and notifications"""
+    #     if naive_scheduled_at:
+    #         set_test_status_live.apply_async(
+    #             args=[test.test_id], eta=naive_scheduled_at)
+    #         logger.info(
+    #             f"Scheduled set_test_status_live for test {test.test_id} at {naive_scheduled_at} (Celery)")
+    #     if naive_assessment_deadline:
+    #         set_test_status_ended.apply_async(
+    #             args=[test.test_id], eta=naive_assessment_deadline)
+    #         logger.info(
+    #             f"Scheduled set_test_status_ended for test {test.test_id} at {naive_assessment_deadline} (Celery)")
+
+    #     creator = await self._get_user_by_id(test.created_by, db)
+    #     return await self._format_test_response(test, creator)
+    # """Test Service with AI integration and notifications"""
 
     def __init__(self):
         self.ai_service = get_ai_service()
@@ -214,7 +197,8 @@ class TestService:
                 if skill_graph and isinstance(skill_graph, dict) and "root_nodes" in skill_graph:
                     # Count nodes by priority for new columns
                     from app.services.skill_graph_generation.graph import count_nodes_by_priority
-                    node_counts = count_nodes_by_priority(SkillGraph.model_validate(skill_graph))
+                    node_counts = count_nodes_by_priority(
+                        SkillGraph.model_validate(skill_graph))
                     test_data = deepcopy(test_data)
                     test_data.high_priority_nodes = node_counts["H"]
                     test_data.medium_priority_nodes = node_counts["M"]
@@ -235,7 +219,8 @@ class TestService:
                         test_data.medium_priority_questions * 60 +
                         test_data.low_priority_questions * 45
                     )
-                    test_data.time_limit_minutes = max(5, min(480, total_seconds // 60))
+                    test_data.time_limit_minutes = max(
+                        5, min(480, total_seconds // 60))
                     test_data.total_marks = test_data.total_questions
 
             # 2. Create the test
@@ -288,7 +273,7 @@ class TestService:
 
         except Exception as e:
             logger.error(f"AI processing failed for test {test.test_id}: {e}")
-    
+
     async def schedule_test(self, test_id: int, schedule_data: Any, db: AsyncSession) -> dict:
         """Schedule a test for publishing, enforcing one-or-nothing principle."""
         try:
@@ -301,9 +286,11 @@ class TestService:
             creator = await self._get_user_by_id(test.created_by, db)
             # Only allow scheduling if not already scheduled
             if test.status == TestStatus.SCHEDULED.value:
-                raise HTTPException(status_code=400, detail="Test is already scheduled.")
+                raise HTTPException(
+                    status_code=400, detail="Test is already scheduled.")
             # Convert schedule_data to dict for repository
-            schedule_dict = schedule_data.dict(exclude_unset=True) if hasattr(schedule_data, 'dict') else schedule_data
+            schedule_dict = schedule_data.dict(exclude_unset=True) if hasattr(
+                schedule_data, 'dict') else schedule_data
 
             # Update test with schedule info
             await test_repo.update_test_schedule(test_id, schedule_dict)
@@ -550,7 +537,6 @@ class TestService:
                     detail="Test not found"
                 )
 
-            
             # Get the current test before update
             current_test = await repo.get_test_by_id(test_id)
 
@@ -559,7 +545,6 @@ class TestService:
             if "job_description" in test_data.dict(exclude_unset=True):
                 if test_data.job_description is not None and test_data.job_description != current_test.job_description:
                     job_desc_updated = True
-
 
             # Update the test
             updated_test = await repo.update_test(test_id, test_data, updated_by)
@@ -573,7 +558,8 @@ class TestService:
                 from app.services.skill_graph_generation.state import SkillGraph
                 from app.services.skill_graph_generation.graph import count_nodes_by_priority
                 if skill_graph and isinstance(skill_graph, dict) and "root_nodes" in skill_graph:
-                    node_counts = count_nodes_by_priority(SkillGraph.model_validate(skill_graph))
+                    node_counts = count_nodes_by_priority(
+                        SkillGraph.model_validate(skill_graph))
                     await repo.update_skill_graph(
                         updated_test.test_id,
                         skill_graph,
@@ -585,7 +571,8 @@ class TestService:
                         text("""
                         UPDATE tests SET high_priority_nodes = :h, medium_priority_nodes = :m, low_priority_nodes = :l WHERE test_id = :tid
                         """),
-                        {"h": node_counts["H"], "m": node_counts["M"], "l": node_counts["L"], "tid": updated_test.test_id}
+                        {"h": node_counts["H"], "m": node_counts["M"],
+                            "l": node_counts["L"], "tid": updated_test.test_id}
                     )
                     await db.commit()
                 # Refresh updated_test with new AI fields
@@ -662,7 +649,6 @@ class TestService:
         return user
 
     async def _format_test_response(self, test: Test, creator: User = None) -> TestResponse:
-
         """Format test response with creator info, total candidates, and duration"""
         import json
         from app.repositories.candidate_count_helper import count_candidates_by_test_id
@@ -688,7 +674,8 @@ class TestService:
         # Calculate duration (in minutes) if scheduled_at and assessment_deadline are present
         duration = None
         if test.scheduled_at and test.assessment_deadline:
-            duration = int((test.assessment_deadline - test.scheduled_at).total_seconds() // 60)
+            duration = int((test.assessment_deadline -
+                           test.scheduled_at).total_seconds() // 60)
 
         return TestResponse(
             test_id=test.test_id,
@@ -715,9 +702,12 @@ class TestService:
             creator_role=creator.role.value if creator else None,
             total_candidates=total_candidates,
             duration=duration,
-            high_priority_questions=getattr(test, 'high_priority_questions', None),
-            medium_priority_questions=getattr(test, 'medium_priority_questions', None),
-            low_priority_questions=getattr(test, 'low_priority_questions', None),
+            high_priority_questions=getattr(
+                test, 'high_priority_questions', None),
+            medium_priority_questions=getattr(
+                test, 'medium_priority_questions', None),
+            low_priority_questions=getattr(
+                test, 'low_priority_questions', None),
             high_priority_nodes=getattr(test, 'high_priority_nodes', None),
             medium_priority_nodes=getattr(test, 'medium_priority_nodes', None),
             low_priority_nodes=getattr(test, 'low_priority_nodes', None)

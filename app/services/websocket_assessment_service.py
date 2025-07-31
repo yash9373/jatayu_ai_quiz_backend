@@ -302,15 +302,12 @@ class AssessmentGraphService:
 
             updated_state = await graph.aget_state(config)
 
-            node_queue = updated_state.values.get("node_queue", [])
             processed_nodes = updated_state.values.get("processed_nodes", [])
+            candidate_graph = updated_state.values.get("candidate_graph", [])
+            total_nodes = len(candidate_graph)
 
-            total_nodes = len(node_queue) + len(processed_nodes)
-            last_node = updated_state.values.get("last_node_id", None)
-            if last_node:
-                total_nodes += 1
             completed_nodes = len(processed_nodes)
-            progress = (completed_nodes / total_nodes) * 100
+            progress = (completed_nodes / (total_nodes or 1)) * 100
 
             return {
                 "question_id": question_id,
@@ -383,13 +380,10 @@ class AssessmentGraphService:
 
             updated_state = await graph.aget_state(config)
 
-            node_queue = updated_state.values.get("node_queue", [])
             processed_nodes = updated_state.values.get("processed_nodes", [])
+            candidate_graph = updated_state.values.get("candidate_graph", [])
+            total_nodes = len(candidate_graph)
 
-            total_nodes = len(node_queue)
-            last_node = updated_state.values.get("last_node_id", None)
-            if last_node:
-                total_nodes += 1
             completed_nodes = len(processed_nodes)
             progress = (completed_nodes / (total_nodes or 1)) * 100
 

@@ -13,9 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class WebSocketMessageType:
-    """Constants for WebSocket message types"""
 
-    # Connection events
     CONNECT = "connect"
     DISCONNECT = "disconnect"
 
@@ -24,29 +22,25 @@ class WebSocketMessageType:
     AUTH_SUCCESS = "auth_success"
     AUTH_FAILED = "auth_failed"
 
-    # Assessment lifecycle
     START_ASSESSMENT = "start_assessment"
     ASSESSMENT_STARTED = "assessment_started"
     ASSESSMENT_ERROR = "assessment_error"
     ASSESSMENT_COMPLETED = "assessment_completed"
     ASSESSMENT_FINALIZED = "complete_assessment"
-    # Question handling
+
     GET_QUESTION = "get_question"
     QUESTION = "question"
     SUBMIT_ANSWER = "submit_answer"
     ANSWER_FEEDBACK = "answer_feedback"
 
-    # Progress tracking
     PROGRESS_UPDATE = "progress_update"
 
-    # System messages
     ERROR = "error"
     HEARTBEAT = "heartbeat"
-    PONG = "pong"    # Chat messages
+    PONG = "pong"
     CHAT_MESSAGE = "chat_message"
     SYSTEM_MESSAGE = "system_message"
 
-    # Testing/Debug messages
     GET_TEST_INFO = "get_test_info"
     TEST_INFO = "test_info"
 
@@ -92,12 +86,15 @@ class AssessmentWebSocketHandler:
                 await self._send_error(connection_id, "You have already completed this assessment.")
                 await websocket.close(code=4002, reason="Assessment already completed")
             # Include recovery information if assessment was auto-recovered
+            progress = await assessment_graph_service.get_assessment_progress(connection_id)
+
             if connection_info and connection_info.get("assessment_id"):
                 auth_data["recovered_assessment"] = {
                     "assessment_id": connection_info["assessment_id"],
                     "test_id": connection_info["test_id"],
                     "thread_id": connection_info["thread_id"],
-                    "is_in_assessment": connection_info["is_in_assessment"]
+                    "is_in_assessment": connection_info["is_in_assessment"],
+                    "progress": progress if progress else {}
                 }
 
             await self._send_message(connection_id, {

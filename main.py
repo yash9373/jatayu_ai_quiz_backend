@@ -32,9 +32,11 @@ async def on_startup():
 
 app.include_router(router)
 
+
 @app.get("/")
 async def root():
     return {"status": "healthy", "message": "Jatayu AI Quiz Backend is running"}
+
 
 @app.get("/health")
 async def health_check():
