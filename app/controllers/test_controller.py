@@ -54,19 +54,6 @@ async def update_question_counts(
     )
 
 
-@router.post("/{test_id}/schedule", response_model=TestResponse)
-async def schedule_test(
-    test_id: int,
-    schedule_data: TestSchedule,
-    current_user: User = Depends(recruiter_required),
-    db: AsyncSession = Depends(get_db)
-):
-    """Schedule a test (set scheduled_at, change status to scheduled)"""
-    return await test_service.schedule_test(
-        test_id=test_id,
-        schedule_data=schedule_data,
-        db=db
-    )
 
 
 @router.post("/", response_model=TestResponse)
@@ -172,7 +159,7 @@ async def get_all_tests_for_recruiters(
 # Additional endpoints for test lifecycle management
 
 
-@router.post("/{test_id}/schedule")
+@router.post("/{test_id}/schedule", response_model=TestResponse)
 async def schedule_test(
     test_id: int,
     schedule_data: TestSchedule,  # Use schema for validation

@@ -4,7 +4,7 @@ from sqlalchemy.orm import selectinload
 from typing import Optional, List, Dict, Any
 from app.models.candidate_application import CandidateApplication
 from datetime import datetime
-
+from app.models.user import User
 class CandidateApplicationRepository:
     @staticmethod
     async def create_application(db: AsyncSession, data: dict) -> CandidateApplication:
@@ -109,3 +109,28 @@ class CandidateApplicationRepository:
             .options(selectinload(CandidateApplication.user))
         )
         return result.scalars().all()
+
+    @staticmethod
+    async def get_shortlisted_candidates_with_emails(db: AsyncSession, test_id: int) -> List[Dict[str, Any]]:
+        """Get all shortlisted candidates for a test with their email addresses."""
+
+        
+        result = await db.execute(
+            select(CandidateApplication)
+            .where(CandidateApplication.test_id == test_id)
+            .where(CandidateApplication.is_shortlisted == True)
+            .options(selectinload(CandidateApplication.user))
+        )
+        applications = result.scalars().all()
+        
+        candidates = []
+        for app in applications:
+            if app.user:  # Ensure user relationship is loaded
+                candidates.append({
+                    'application_id': app.application_id,
+                    'user_id': app.user_id,
+                    'name': app.user.name,
+                    'email': app.user.email
+                })
+        
+        return candidates

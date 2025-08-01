@@ -72,7 +72,7 @@ def run_migrations_online() -> None:
     if config.get_main_option("sqlalchemy.url", "").startswith("postgresql+asyncpg"):
         async def run_async_migrations():
             connectable = create_async_engine(
-                config.get_main_option("sqlalchemy.url").replace("postgresql+asyncpg", "postgresql")
+                config.get_main_option("sqlalchemy.url")
             )
             
             async with connectable.connect() as connection:

@@ -53,7 +53,17 @@ class AuthService(IAuthService):
             raise HTTPException(status_code=400, detail="Password is required")
 
         user = await get_user_by_email(db, email)
-        if not user or not verify_password(password, user.hashed_password):
+        if not user:
+            print(f"[DEBUG] Login failed: User not found for email {email}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+        
+        # Debug password verification
+        password_valid = verify_password(password, user.hashed_password)
+        print(f"[DEBUG] Login attempt for {email}: password_valid={password_valid}")
+        
+        if not password_valid:
+            print(f"[DEBUG] Login failed: Invalid password for email {email}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
         access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)

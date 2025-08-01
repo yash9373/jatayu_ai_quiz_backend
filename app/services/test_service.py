@@ -296,9 +296,18 @@ class TestService:
             await test_repo.update_test_schedule(test_id, schedule_dict)
             await test_repo.update_test_status(test_id, TestStatus.SCHEDULED.value)
 
-            # Send notification
+            # Send notification to recruiter
             updated_test = await test_repo.get_test_by_id(test_id)
             await self.notification_service.send_test_scheduled_notification(updated_test, creator)
+            
+            # Send notifications to all shortlisted candidates
+            try:
+                response_codes = await self.notification_service.send_test_scheduled_notifications_to_shortlisted_candidates(updated_test, db)
+                logger.info(f"Sent test scheduled notifications to shortlisted candidates for test {test_id}. Response codes: {response_codes}")
+            except Exception as e:
+                logger.error(f"Failed to send notifications to shortlisted candidates for test {test_id}: {str(e)}")
+                # Don't fail the entire operation if email sending fails
+            
             return await self._format_test_response(updated_test, creator)
 
         except Exception as e:

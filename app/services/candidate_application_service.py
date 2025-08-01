@@ -75,17 +75,30 @@ class CandidateApplicationService:
         user = await get_user_by_email(db, sanitized_email)
         generated_password = None
         if not user:
-            generated_password = ''.join(random.choices(
-                string.ascii_letters + string.digits + string.punctuation, k=12))
+            # Use safe characters only - avoid ambiguous and HTML-problematic characters
+            safe_chars = string.ascii_letters + string.digits + "!@#$%^&*()-_=+"
+            # Remove ambiguous characters
+            safe_chars = ''.join(c for c in safe_chars if c not in '0O1lI')
+            generated_password = ''.join(random.choices(safe_chars, k=12))
+            print(f"[DEBUG] Generated password for {sanitized_email}: {generated_password}")
             hashed_password = get_password_hash(generated_password)
+            print(f"[DEBUG] Password hashed successfully for {sanitized_email}")
             name = data.name or sanitized_email.split('@')[0]
             new_user = await create_user(db, name=name, email=sanitized_email, hashed_password=hashed_password, role=UserRole.candidate)
             user_id = new_user.user_id
+            print(f"[DEBUG] User created successfully with ID: {user_id}")
+            
+            # Test password verification immediately after creation
+            from app.core.security import verify_password
+            verification_test = verify_password(generated_password, hashed_password)
+            print(f"[DEBUG] Immediate password verification test: {verification_test}")
+            
             NotificationService().send_account_creation_email(
                 to_email=sanitized_email,
                 username=sanitized_email,
                 password=generated_password
             )
+            print(f"[DEBUG] Account creation email sent to {sanitized_email}")
         else:
             user_id = user.user_id
         # Check for duplicate

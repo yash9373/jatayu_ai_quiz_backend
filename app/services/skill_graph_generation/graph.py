@@ -146,6 +146,7 @@ INSTRUCTIONS FOR EXTRACTION:
    - Avoid random variance, excessive restructuring, or fluctuating depth.
    - Be deterministic in structure: always return the same format, field order, and prioritization logic.
 
+7. Skills and subskills should not repeat across different branches in any situation.
 
 EXCLUSIONS:
 
