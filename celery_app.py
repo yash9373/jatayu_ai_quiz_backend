@@ -74,6 +74,7 @@ def screen_resume_task(application_id, resume_link, job_description, min_resume_
                 resume_text = f"Error downloading or extracting resume: {e}"
             if not resume_text:
                 return "Error: Resume text is empty or invalid."
+            print(f"[Celery] Calling screen_resume_text with min_resume_score={min_resume_score}")
             screening_result = service.screen_resume_text(
                 resume_text, job_description, min_resume_score=min_resume_score)
             print("[Celery] screening_result:", screening_result)
