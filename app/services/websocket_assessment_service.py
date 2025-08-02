@@ -520,12 +520,22 @@ class AssessmentGraphService:
             assessment_id = int(thread_id)
 
             current_time = datetime.utcnow()
+            #
+            candidate_graph = state_values.get("candidate_graph", [])
+            generated_questions = state_values.get("generated_questions", {})
+            candidate_response = state_values.get("candidate_response", {})
+            result = {
+                "candidate_graph": candidate_graph,
+                "generated_questions": generated_questions,
+                "candidate_response": candidate_response
+            }
 
             success = await assessment_repo.update_assessment_status(
                 assessment_id=assessment_id,
                 status="completed",
                 percentage_score=final_percentage_score,
-                end_time=current_time
+                end_time=current_time,
+                result=result
             )
 
             if not success:
@@ -598,15 +608,6 @@ class AssessmentGraphService:
             return None
 
     def cleanup_connection(self, connection_id: str):
-        """
-        Clean up resources for a disconnected connection
-
-        Note: We don't delete the graph state here as it should persist
-        in the database for potential reconnection.
-
-        Args:
-            connection_id: Connection that was disconnected
-        """
         logger.info(
             f"Cleaning up assessment resources for connection {connection_id}")
         # Note: Graph state persists via thread_id in langgraph's persistence layer

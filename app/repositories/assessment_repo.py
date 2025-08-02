@@ -4,6 +4,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.models.assessment import Assessment
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
+from app.models.user import User
 import logging
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ class AssessmentRepository:
                 application_id=application_id,
                 user_id=user_id,
                 test_id=test_id,
-                status="in_progress",  # Default status when assessment is created
+                status="in_progress",
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc)
             )
@@ -103,7 +104,8 @@ class AssessmentRepository:
         assessment_id: int,
         status: str,
         percentage_score: float,
-        end_time: Optional[datetime] = None
+        end_time: Optional[datetime] = None,
+        result: Optional[Dict[str, Any]] = None
     ) -> bool:
         """
         Update assessment with completion status and results
@@ -121,7 +123,8 @@ class AssessmentRepository:
             update_values = {
                 "status": status,
                 "percentage_score": percentage_score,
-                "updated_at": datetime.now(timezone.utc)
+                "updated_at": datetime.now(timezone.utc),
+                "result": result
             }
 
             # Add end_time if provided
@@ -255,10 +258,9 @@ class AssessmentRepository:
                     "test_name": getattr(assessment.test, 'test_name', None) if assessment.test else None,
                     "parsed_job_description": getattr(assessment.test, 'parsed_job_description', None) if assessment.test else None,
                     "skill_graph": getattr(assessment.test, 'skill_graph', None) if assessment.test else None
-                },
-                "user": {
+                },                "user": {
                     "user_id": assessment.user.user_id if assessment.user else None,
-                    "username": getattr(assessment.user, 'username', None) if assessment.user else None,
+                    "name": getattr(assessment.user, 'name', None) if assessment.user else None,
                     "email": getattr(assessment.user, 'email', None) if assessment.user else None
                 },
                 "application": {
@@ -306,20 +308,34 @@ class AssessmentRepository:
 
     async def get_assessment_report(self, assessment_id: int) -> Optional[Dict[str, Any]]:
         """
-        Get existing assessment report if available
+        Get existing assessment report if available with candidate information
 
         Args:
             assessment_id: Assessment ID to get report for
 
         Returns:
-            Dict containing report data or None if not generated
+            Dict containing report data with candidate name or None if not generated
         """
         try:
-            result = await self.db.execute(
-                select(Assessment.report, Assessment.status, Assessment.updated_at).where(
-                    Assessment.assessment_id == assessment_id
+
+            # Query assessment report with candidate information
+            query = (
+                select(
+                    Assessment.report,
+                    Assessment.status,
+                    Assessment.updated_at,
+                    Assessment.result,
+                    Assessment.user_id,
+                    Assessment.percentage_score,
+                    User.name.label('candidate_name'),
+                    User.email.label('candidate_email')
                 )
+                .select_from(Assessment)
+                .join(User, Assessment.user_id == User.user_id)
+                .where(Assessment.assessment_id == assessment_id)
             )
+
+            result = await self.db.execute(query)
             row = result.first()
 
             if not row:
@@ -329,8 +345,13 @@ class AssessmentRepository:
                 "assessment_id": assessment_id,
                 "report": row.report,
                 "status": row.status,
+                "result": row.result,
                 "report_generated": row.report is not None,
-                "last_updated": row.updated_at
+                "last_updated": row.updated_at,
+                "candidate_id": row.user_id,
+                "candidate_name": row.candidate_name,
+                "candidate_email": row.candidate_email,
+                "percentage_score": row.percentage_score
             }
 
         except Exception as e:

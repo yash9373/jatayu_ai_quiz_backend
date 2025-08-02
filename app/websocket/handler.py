@@ -1,6 +1,18 @@
 import json
 import logging
-from datetime import datetime
+import asyncio
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Optional
+from fastapi import WebSocket, WebSocketDisconnect, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.websocket.connection_manager import connection_manager, ConnectionState
+from app.db.database import get_db
+from app.services.websocket_assessment_service import assessment_graph_service
+from app.repositories.test_repo import TestRepository
+from app.repositories.assessment_repo import AssessmentRepository
+import logging
+import asyncio
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 from fastapi import WebSocket, WebSocketDisconnect, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +46,8 @@ class WebSocketMessageType:
     ANSWER_FEEDBACK = "answer_feedback"
 
     PROGRESS_UPDATE = "progress_update"
+    TIME_WARNING = "time_warning"
+    TIME_REMAINING = "time_remaining"
 
     ERROR = "error"
     HEARTBEAT = "heartbeat"
@@ -47,7 +61,8 @@ class WebSocketMessageType:
 
 class AssessmentWebSocketHandler:
     def __init__(self):
-        pass
+        # Store active timer tasks for each connection
+        self.assessment_timers: Dict[str, asyncio.Task] = {}
 
     async def handle_connection(
         self,
@@ -110,9 +125,7 @@ class AssessmentWebSocketHandler:
                 if not access_granted:
                     await self._send_error(connection_id, "Access denied for this assessment")
                     await websocket.close(code=4003, reason="Assessment access denied")
-                    return
-
-            # Step 5: Start message handling loop
+                    return            # Step 5: Start message handling loop
             await self._handle_messages(connection_id, websocket, db)
 
         except WebSocketDisconnect:
@@ -124,6 +137,8 @@ class AssessmentWebSocketHandler:
         finally:
             # Cleanup: Always clean up resources on exit
             if connection_id:
+                # Cancel any running assessment timer
+                await self._cancel_assessment_timer(connection_id)
                 await connection_manager.disconnect(connection_id)
                 # Clean up assessment service state
                 assessment_graph_service.cleanup_connection(connection_id)
@@ -259,9 +274,11 @@ class AssessmentWebSocketHandler:
                     "thread_id": str(assessment_id),
                     "test_name": test.test_name,
                 }
-            })
-            # Generate first question automatically
+            })            # Generate first question automatically
             await self._generate_next_question(connection_id, test_id, db)
+
+            # Start the assessment timer based on test schedule
+            await self._start_assessment_timer_from_schedule(connection_id, test, db)
 
         except Exception as e:
             logger.error(f"Error starting assessment: {str(e)}", exc_info=True)
@@ -409,8 +426,7 @@ class AssessmentWebSocketHandler:
         await self._send_message(connection_id, {
             "type": WebSocketMessageType.ERROR,
             "data": {
-                "error": error_message,
-                "timestamp": datetime.utcnow().isoformat()
+                "error": error_message,                "timestamp": datetime.utcnow().isoformat()
             }
         })
 
@@ -429,6 +445,9 @@ class AssessmentWebSocketHandler:
         Finalize assessment and save results using proper thread_id management
         """
         try:
+            # Cancel the assessment timer if it's running
+            await self._cancel_assessment_timer(connection_id)
+
             # Get final results from assessment service
             final_results = await assessment_graph_service.finalize_assessment(connection_id, db)
 
@@ -551,6 +570,184 @@ class AssessmentWebSocketHandler:
                 f"Error handling get_test_info: {str(e)}", exc_info=True)
             await self._send_error(connection_id, f"Failed to retrieve test info: {str(e)}")
 
+    async def _start_assessment_timer_from_schedule(self, connection_id: str, test, db: AsyncSession):
+        """
+        Start a timer for assessment auto-finalization based on test schedule
 
-# Global handler instance
+        Args:
+            connection_id: WebSocket connection identifier
+            test: Test object with scheduled_at and assessment_deadline
+            db: Database session
+        """
+        try:
+            scheduled_at = getattr(test, 'scheduled_at', None)
+            assessment_deadline = getattr(test, 'assessment_deadline', None)
+
+            if not scheduled_at or not assessment_deadline:
+                logger.info(
+                    f"No timer set for {connection_id}: missing schedule or deadline")
+                return
+
+            # Calculate total assessment duration
+            total_duration = assessment_deadline - scheduled_at
+            total_duration_seconds = int(total_duration.total_seconds())
+
+            if total_duration_seconds <= 0:
+                logger.warning(
+                    f"Invalid assessment duration for {connection_id}: {total_duration_seconds} seconds")
+                return
+
+            # Calculate time remaining from now until deadline
+            now = datetime.now(timezone.utc)
+            time_until_deadline = assessment_deadline - now
+            remaining_seconds = int(time_until_deadline.total_seconds())
+
+            if remaining_seconds <= 0:
+                logger.info(
+                    f"Assessment deadline already passed for {connection_id}, auto-finalizing immediately")
+                await self._finalize_assessment(connection_id, "", db)
+                return
+
+            logger.info(
+                f"Starting assessment timer for {connection_id}: {remaining_seconds} seconds until deadline")
+
+            # Create and store the timer task
+            timer_task = asyncio.create_task(
+                self._assessment_timer_task(
+                    connection_id, remaining_seconds, db)
+            )
+            self.assessment_timers[connection_id] = timer_task
+
+        except Exception as e:
+            logger.error(
+                f"Error starting schedule-based assessment timer: {str(e)}")
+
+    async def _start_assessment_timer(self, connection_id: str, time_limit_minutes: int, db: AsyncSession):
+        """
+        Legacy method - kept for backward compatibility
+        Start a timer for assessment auto-finalization
+
+        Args:
+            connection_id: WebSocket connection identifier
+            time_limit_minutes: Test time limit in minutes
+            db: Database session
+        """
+        try:
+            if time_limit_minutes and time_limit_minutes > 0:
+                # Convert minutes to seconds
+                time_limit_seconds = time_limit_minutes * 60
+
+                logger.info(
+                    f"Starting assessment timer for {connection_id}: {time_limit_minutes} minutes")
+
+                # Create and store the timer task
+                timer_task = asyncio.create_task(
+                    self._assessment_timer_task(
+                        connection_id, time_limit_seconds, db)
+                )
+                self.assessment_timers[connection_id] = timer_task
+
+        except Exception as e:
+            logger.error(f"Error starting assessment timer: {str(e)}")
+
+    async def _assessment_timer_task(self, connection_id: str, time_limit_seconds: int, db: AsyncSession):
+        """
+        Timer task that runs in the background and auto-finalizes assessment when time is up
+
+        Args:
+            connection_id: WebSocket connection identifier
+            time_limit_seconds: Time limit in seconds
+            db: Database session
+        """
+        try:
+            # Wait for the specified time
+            await asyncio.sleep(time_limit_seconds)
+
+            # Check if connection is still active and assessment is still in progress
+            connection_info = connection_manager.get_connection_info(
+                connection_id)
+            if not connection_info or not connection_info.get("is_in_assessment"):
+                logger.info(
+                    f"Assessment timer expired but connection {connection_id} no longer active")
+                return
+
+            logger.info(
+                f"Assessment time limit reached for connection {connection_id}, auto-finalizing...")
+
+            # Send time-up notification to client
+            await self._send_message(connection_id, {
+                "type": WebSocketMessageType.SYSTEM_MESSAGE,
+                "data": {
+                    "message": "⏰ Time's up! Your assessment is being automatically submitted.",
+                    "is_time_up": True,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            })
+            # Auto-finalize the assessment
+            await self._finalize_assessment(connection_id, "", db)
+
+        except asyncio.CancelledError:
+            # Timer was cancelled (assessment finished before time limit)
+            logger.info(
+                f"Assessment timer cancelled for connection {connection_id}")
+        except Exception as e:
+            logger.error(f"Error in assessment timer task: {str(e)}")
+
+    async def _cancel_assessment_timer(self, connection_id: str):
+        """
+        Cancel the assessment timer for a connection (called when assessment is completed manually)
+
+        Args:
+            connection_id: WebSocket connection identifier
+        """
+        if connection_id in self.assessment_timers:
+            timer_task = self.assessment_timers[connection_id]
+            if not timer_task.done():
+                timer_task.cancel()
+                logger.info(
+                    f"Assessment timer cancelled for connection {connection_id}")
+            del self.assessment_timers[connection_id]
+
+    async def _check_assessment_time_remaining(self, connection_id: str, db: AsyncSession) -> Optional[int]:
+        """
+        Check how much time is remaining for the assessment based on test schedule
+
+        Args:
+            connection_id: WebSocket connection identifier
+            db: Database session
+
+        Returns:
+            Remaining time in seconds until assessment deadline, or None if no deadline or assessment not found
+        """
+        try:
+            connection_info = connection_manager.get_connection_info(
+                connection_id)
+            if not connection_info:
+                return None
+
+            test_id = connection_info.get("test_id")
+
+            if not test_id:
+                return None  # Get test details for schedule
+            test_repo = TestRepository(db)
+            test = await test_repo.get_test_by_id(test_id)
+
+            assessment_deadline = getattr(
+                test, 'assessment_deadline', None) if test else None
+            if not test or not assessment_deadline:
+                return None
+
+            # Calculate remaining time until deadline
+            now = datetime.now(timezone.utc)
+            time_until_deadline = assessment_deadline - now
+            remaining_seconds = max(
+                0, int(time_until_deadline.total_seconds()))
+
+            return remaining_seconds
+
+        except Exception as e:
+            logger.error(f"Error checking remaining time: {str(e)}")
+            return None
+
+
 websocket_handler = AssessmentWebSocketHandler()

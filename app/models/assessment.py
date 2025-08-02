@@ -39,6 +39,10 @@ class Assessment(Base):
     # If null, indicates report has not been generated yet
     report = Column(JSON, nullable=True)
 
+    # Result from the state graph execution
+    # contains the candidate_graph, questions_asked, and candidates_response
+    result = Column(JSON, nullable=True)
+
     # Relationships
     application = relationship(
         "CandidateApplication", back_populates="assessments")
