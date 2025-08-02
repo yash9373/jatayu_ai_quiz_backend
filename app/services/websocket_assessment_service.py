@@ -87,6 +87,9 @@ class AssessmentGraphService:
         """
         try:
             thread_id = str(assessment_id)
+            if not test:
+                logger.error(f"Test not found for ID {test.test_id}")
+                return None
 
             # Check if we've already initialized this thread
             if thread_id in self.initialized_threads:
@@ -130,12 +133,17 @@ class AssessmentGraphService:
                 candidate_application.parsed_resume)  # type: ignore
             skill_graph = SkillGraph.model_validate_json(
                 test.skill_graph)  # type: ignore
-
+            questions_per_difficulty = {
+                "H": test.high_priority_questions,
+                "M": test.medium_priority_questions,
+                "L": test.low_priority_questions
+            }
             # Create initial agent state
             agent_state = AgentState(
                 parsed_jd=parsed_jd,
                 parsed_resume=parsed_resume,
                 skill_graph=skill_graph,
+                questions_per_difficulty=questions_per_difficulty,
             )
 
             # Initialize the graph with agent state

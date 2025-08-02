@@ -263,24 +263,7 @@ def initialize(state: AgentState):
 
 
 def generate_question(state: AgentState):
-    """
-    Stage 2: Ask Question Node - Generate and deliver the next MCQ
 
-    Node Completion Logic:
-    1. If we have a current node (last_node_id), we continue asking questions for that node
-    2. A node is considered completed when:
-       - All questions for the difficulty level are asked (H=5, M=5, L=5), OR
-       - The node passes the threshold (70%), OR
-       - The node status is already marked as "completed"
-    3. Only when a node is completed do we move to the next node in the queue
-    4. This ensures all questions for a skill are asked before moving to the next skill
-
-    Flow:
-    - Stay on current node until completion criteria met
-    - Generate question → interrupt → wait for response → process → check completion
-    - If node complete: mark completed, clear last_node_id, get next node from queue
-    - If node incomplete: stay on same node for next question
-    """
     print("Generating question for current node...")
 
     # Step 1: Determine current node to work with
@@ -432,7 +415,10 @@ def generate_question(state: AgentState):
             "total_questions_asked": state.total_questions_asked,
             "session_start": state.start_time}
     }    # Step 5: Generate MCQ for current node
-    resume_text = ""  # You can add resume text here later if needed
+    resume_text = ""
+    if state.parsed_resume and hasattr(state.parsed_resume, "model_dump"):
+        parsed_resume = state.parsed_resume.model_dump()
+        resume_text = f"Experience: {json.dumps(parsed_resume.get('experience', [],), indent=2)} Projects : {json.dumps(parsed_resume.get('projects', []))}"
 
     generated_mcq = generate_question_for_node(
         context=context,
