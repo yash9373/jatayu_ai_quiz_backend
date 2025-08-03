@@ -60,8 +60,8 @@ class DatabaseSetup:
 
         enums = [
             ("userrole", ["candidate", "recruiter"]),
-            ("teststatus", ["preparing", "draft", "scheduled", "live",
-             "ended", "published", "paused", "completed", "archived"]),
+            ("teststatus", ["preparing", "draft",
+             "scheduled", "live", "ended"]),
             ("assessmentstatus", ["started", "in_progress",
              "completed", "abandoned", "timed_out"])
         ]

@@ -65,7 +65,7 @@ class DatabaseValidator:
         print("\n📋 Checking Enum Types...")
 
         required_enums = {
-            'teststatus': ['preparing', 'draft', 'scheduled', 'live', 'ended', 'completed', 'paused', 'published', 'archived'],
+            'teststatus': ['preparing', 'draft', 'scheduled', 'live', 'ended'],
             'assessmentstatus': ['started', 'in_progress', 'completed', 'abandoned', 'timed_out'],
             'userrole': ['candidate', 'recruiter']
         }
