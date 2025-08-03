@@ -29,6 +29,13 @@ class DatabaseSetup:
         """Connect to the database."""
         try:
             parsed_url = urlparse(self.database_url)
+            # Handle both postgresql:// and postgresql+asyncpg:// URLs
+            if parsed_url.scheme == 'postgresql+asyncpg':
+                # Remove the +asyncpg part for asyncpg connection
+                clean_url = self.database_url.replace(
+                    'postgresql+asyncpg://', 'postgresql://')
+                parsed_url = urlparse(clean_url)
+
             self.conn = await asyncpg.connect(
                 host=parsed_url.hostname,
                 port=parsed_url.port or 5432,
@@ -53,8 +60,8 @@ class DatabaseSetup:
 
         enums = [
             ("userrole", ["candidate", "recruiter"]),
-            ("teststatus", ["preparing", "draft",
-             "scheduled", "live", "ended"]),
+            ("teststatus", ["preparing", "draft", "scheduled", "live",
+             "ended", "published", "paused", "completed", "archived"]),
             ("assessmentstatus", ["started", "in_progress",
              "completed", "abandoned", "timed_out"])
         ]
