@@ -192,7 +192,6 @@ JOB DESCRIPTION:
 
 
 def get_llm():
-    """Get LLM instance lazily to avoid initialization issues during import."""
     return ChatOpenAI(
         model="gpt-4o",
     )
@@ -232,7 +231,8 @@ def generate_skill_graph_from_raw_jd(state: State) -> State:
             raw_json = raw_json.removeprefix("```").removesuffix("```").strip()
 
         parsed_json = json.loads(raw_json)
-        print("[DEBUG] Parsed JSON from LLM:", json.dumps(parsed_json, indent=2))  # Debug print
+        print("[DEBUG] Parsed JSON from LLM:", json.dumps(
+            parsed_json, indent=2))  # Debug print
         # Ensure we get a SkillGraph instance
 
         result = SkillGraph(**parsed_json)

@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import insert, select, update
 from sqlalchemy.exc import SQLAlchemyError
-from app.models.assessment import Assessment
+from app.models.assessment import Assessment, AssessmentStatus
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from app.models.user import User
@@ -34,13 +34,15 @@ class AssessmentRepository:
             assessment_id if successful, None otherwise
         """
         try:            # Create new assessment instance
+            now_utc = datetime.now(timezone.utc)
             assessment = Assessment(
                 application_id=application_id,
                 user_id=user_id,
                 test_id=test_id,
-                status="in_progress",
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc)
+                status=AssessmentStatus.IN_PROGRESS.value,
+                created_at=now_utc,
+                updated_at=now_utc,
+                start_time=now_utc  # start_time set same as created_at per requirements
             )
 
             self.db.add(assessment)

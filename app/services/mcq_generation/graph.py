@@ -15,7 +15,11 @@ from psycopg.rows import dict_row
 import os
 from dotenv import load_dotenv
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+import asyncio
+import logging
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 def get_llm():
@@ -637,6 +641,10 @@ raw_graph.add_edge("initialize", "interrupt_node")
 raw_graph.add_edge("finalize_assessment", END)
 # Global connection pool for PostgreSQL
 _connection_pool = None
+# NEW: cache compiled graph & connection to avoid exhausting pool
+_compiled_graph = None
+_checkpointer_conn = None
+_graph_lock = asyncio.Lock()
 
 
 async def get_connection_pool():
@@ -658,11 +666,21 @@ async def get_connection_pool():
 
 
 async def close_connection_pool():
-    """Close the global connection pool"""
-    global _connection_pool
-    if _connection_pool is not None:
-        await _connection_pool.close()
+    """Close the global connection pool and release compiled graph connection"""
+    global _connection_pool, _compiled_graph, _checkpointer_conn
+    try:
+        if _connection_pool is not None:
+            # If we checked out a dedicated connection for the graph, return it
+            if _checkpointer_conn is not None:
+                try:
+                    await _connection_pool.putconn(_checkpointer_conn)
+                except Exception:
+                    pass
+            await _connection_pool.close()
+    finally:
         _connection_pool = None
+        _compiled_graph = None
+        _checkpointer_conn = None
 
 
 async def setup_database_tables():
@@ -675,22 +693,29 @@ async def setup_database_tables():
 
 
 async def get_question_generation_graph():
-    """Get the compiled graph with PostgreSQL checkpointer"""
-    # Setup database tables first
-    await setup_database_tables()
+    """Get the compiled graph with PostgreSQL checkpointer (cached)."""
+    global _compiled_graph, _checkpointer_conn
+    if _compiled_graph is not None:
+        return _compiled_graph
 
-    pool = await get_connection_pool()
-
-    # Get a connection from the pool for the checkpointer
-    # Note: We're not using async with here because we want the connection to persist
-    conn = await pool.getconn()
-
-    # Create the checkpointer with the persistent connection
-    checkpointer = AsyncPostgresSaver(
-        conn, serde=JsonPlusSerializer(pickle_fallback=True))
-
-    return raw_graph.compile(
-        checkpointer=checkpointer,
-        # Updated to match new node structure
-        # interrupt_after=["interrupt_node"]
-    )
+    async with _graph_lock:
+        # Double-checked locking
+        if _compiled_graph is not None:
+            return _compiled_graph
+        try:
+            await setup_database_tables()
+            pool = await get_connection_pool()
+            # Persist a single connection for the lifetime of the compiled graph
+            _checkpointer_conn = await pool.getconn()
+            checkpointer = AsyncPostgresSaver(
+                _checkpointer_conn, serde=JsonPlusSerializer(
+                    pickle_fallback=True)
+            )
+            _compiled_graph = raw_graph.compile(checkpointer=checkpointer)
+            logger.info(
+                "Compiled MCQ generation graph (cached instance created)")
+            return _compiled_graph
+        except Exception as e:
+            logger.error(
+                f"Failed to compile/get question generation graph: {e}")
+            raise

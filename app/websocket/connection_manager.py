@@ -30,6 +30,9 @@ class ConnectionState:
         self.is_authenticated = False
         self.is_in_assessment = False
         self.graph_initialized = False
+        # New flags for graceful shutdown / finalization
+        self.closed: bool = False
+        self.finalizing: bool = False
 
     def update_activity(self):
         """
@@ -230,6 +233,7 @@ class WebSocketConnectionManager:
             return
 
         connection_state = self.active_connections[connection_id]
+        connection_state.closed = True  # mark closed early to prevent further sends
         user_id = connection_state.user_id
         test_id = connection_state.test_id
 
@@ -256,22 +260,27 @@ class WebSocketConnectionManager:
         logger.info(f"WebSocket connection closed: {connection_id}")
 
     async def send_personal_message(self, connection_id: str, message: dict):
-        """Send a message to a specific connection"""
+        """Send a message to a specific connection (safe)."""
         if connection_id not in self.active_connections:
             logger.warning(
                 f"Attempted to send message to non-existent connection: {connection_id}")
             return False
-
+        connection_state = self.active_connections[connection_id]
+        if connection_state.closed:
+            logger.debug(f"Skip send to closed connection {connection_id}")
+            return False
         try:
-            connection_state = self.active_connections[connection_id]
             connection_state.update_activity()
-
             await connection_state.websocket.send_text(json.dumps(message))
             return True
-
         except Exception as e:
             logger.error(f"Error sending message to {connection_id}: {str(e)}")
-            await self.disconnect(connection_id)
+            # Mark closed to avoid loops
+            connection_state.closed = True
+            try:
+                await self.disconnect(connection_id)
+            except Exception:
+                pass
             return False
 
     async def send_to_user(self, user_id: int, message: dict):
@@ -427,6 +436,11 @@ class WebSocketConnectionManager:
             if assessment_deadline is not None and assessment_deadline < now:
                 logger.warning(
                     f"Test {test_id} assessment deadline has passed")
+                return False
+            # Enforce minimum remaining window (1 minute)
+            if assessment_deadline is not None and (assessment_deadline - now).total_seconds() < 60:
+                logger.info(
+                    f"Blocking start: less than 1 minute remains for test {test_id}")
                 return False
 
             # TODO: Add additional checks:
