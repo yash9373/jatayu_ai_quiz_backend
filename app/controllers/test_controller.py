@@ -17,6 +17,8 @@ from app.repositories.test_repo import TestRepository
 
 router = APIRouter()
 test_service = get_enhanced_test_service()
+
+
 class QuestionCountUpdate(BaseModel):
     high_priority_questions: int
     medium_priority_questions: int
@@ -24,17 +26,15 @@ class QuestionCountUpdate(BaseModel):
     total_questions: int
     time_limit_minutes: int
 
+
 def recruiter_required(current_user: User = Depends(get_current_user)):
     """Dependency to ensure only recruiters can access certain endpoints"""
     if current_user.role != UserRole.recruiter:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, 
+            status_code=status.HTTP_403_FORBIDDEN,
             detail="Recruiter access required"
         )
     return current_user
-
-
-
 
 
 # New endpoint for updating per-priority question counts and total
@@ -54,12 +54,11 @@ async def update_question_counts(
     )
 
 
-
-
 @router.post("/", response_model=TestResponse)
 async def create_test(
     test_data: TestCreate,
-    current_user: User = Depends(recruiter_required),  # Only recruiters can create tests
+    # Only recruiters can create tests
+    current_user: User = Depends(recruiter_required),
     db: AsyncSession = Depends(get_db)
 ):
     """Create a new test with AI processing (recruiters only)"""
@@ -69,7 +68,8 @@ async def create_test(
         db=db
     )
 
-@router.get("/", response_model=List[TestSummary])
+
+@router.get("/", response_model=List[TestResponse])
 async def get_all_tests(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=100),
@@ -77,12 +77,15 @@ async def get_all_tests(
     db: AsyncSession = Depends(get_db)
 ):
     """Get tests created by the current user only (owner only)"""
-    return await test_service.get_tests_by_creator(
+
+    tests = await test_service.get_tests_by_creator(
         creator_id=current_user.user_id,
         db=db,
         skip=skip,
         limit=limit
     )
+    # print(f"[DEBUG] : Retrived test data ", tests)
+    return tests
 
 
 @router.get("/{test_id}", response_model=TestResponse)
@@ -93,15 +96,16 @@ async def get_test_by_id(
 ):
     """Get a specific test by ID (owner only)"""
     test = await test_service.get_test_by_id(test_id=test_id, db=db)
-    
+
     # Check if user is the owner
     if test.created_by != current_user.user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only access your own tests"
         )
-    
+
     return test
+
 
 @router.put("/{test_id}", response_model=TestResponse)
 async def update_test(
@@ -118,13 +122,15 @@ async def update_test(
             detail="You can only update your own tests"
         )
     if existing_test.status != "draft":
-        raise HTTPException(status_code=403, detail="Test/job description can only be updated in 'draft' status.")
+        raise HTTPException(
+            status_code=403, detail="Test/job description can only be updated in 'draft' status.")
     return await test_service.update_test_job_description(
         test_id=test_id,
         test_data=test_data,
         updated_by=current_user.user_id,
         db=db
     )
+
 
 @router.delete("/{test_id}")
 async def delete_test(
@@ -140,11 +146,12 @@ async def delete_test(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only delete your own tests"
         )
-    
+
     await test_service.delete_test(test_id=test_id, db=db)
     return {"message": "Test deleted successfully"}
 
 # Additional role-based endpoints
+
 
 @router.get("/recruiter/all", response_model=List[TestSummary])
 async def get_all_tests_for_recruiters(
@@ -185,6 +192,7 @@ async def schedule_test(
         db=db
     )
 
+
 @router.post("/{test_id}/publish")
 async def publish_test(
     test_id: int,
@@ -199,8 +207,9 @@ async def publish_test(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only publish your own tests"
         )
-    
+
     return await test_service.publish_test(test_id=test_id, db=db)
+
 
 @router.post("/{test_id}/unpublish")
 async def unpublish_test(
@@ -216,8 +225,9 @@ async def unpublish_test(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only unpublish your own tests"
         )
-    
+
     return await test_service.unpublish_test(test_id=test_id, db=db)
+
 
 @router.get("/{test_id}/status")
 async def get_test_status(
@@ -233,8 +243,9 @@ async def get_test_status(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only view your own test status"
         )
-    
+
     return await test_service.get_test_status(test_id=test_id, db=db)
+
 
 @router.post("/{test_id}/duplicate")
 async def duplicate_test(
@@ -250,7 +261,7 @@ async def duplicate_test(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only duplicate your own tests"
         )
-    
+
     return await test_service.duplicate_test(
         test_id=test_id,
         created_by=current_user.user_id,

@@ -8,7 +8,7 @@ import json
 import logging
 from langgraph.types import Command
 from langchain_core.runnables import RunnableConfig
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Optional, Any, List, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -519,7 +519,7 @@ class AssessmentGraphService:
             assessment_repo = AssessmentRepository(db)
             assessment_id = int(thread_id)
 
-            current_time = datetime.utcnow()
+            current_time = datetime.now(timezone.utc)
             #
             candidate_graph = state_values.get("candidate_graph", [])
             generated_questions = state_values.get("generated_questions", {})
