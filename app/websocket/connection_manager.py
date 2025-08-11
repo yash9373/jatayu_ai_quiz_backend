@@ -30,7 +30,6 @@ class ConnectionState:
         self.is_authenticated = False
         self.is_in_assessment = False
         self.graph_initialized = False
-        # New flags for graceful shutdown / finalization
         self.closed: bool = False
         self.finalizing: bool = False
 

@@ -25,7 +25,8 @@ class TestRepository:
                 update(Test)
                 .where(Test.test_id == test_id)
                 .values(
-                    skill_graph=json.dumps(skill_graph) if skill_graph else None,
+                    skill_graph=json.dumps(
+                        skill_graph) if skill_graph else None,
                     total_questions=total_questions
                 )
             )
@@ -34,7 +35,8 @@ class TestRepository:
             logger.info(f"Updated skill_graph for test {test_id}")
         except Exception as e:
             await self.db.rollback()
-            logger.error(f"Error updating skill_graph for test {test_id}: {str(e)}")
+            logger.error(
+                f"Error updating skill_graph for test {test_id}: {str(e)}")
             raise
 
     async def get_test_by_id(self, test_id: int, created_by=None) -> Optional[Test]:
@@ -74,15 +76,16 @@ class TestRepository:
             update(Test)
             .where(Test.test_id == test_id)
             .values(
-                high_priority_nodes=high,
-                medium_priority_nodes=medium,
-                low_priority_nodes=low,
+                high_priority_questions=high,
+                medium_priority_questions=medium,
+                low_priority_questions=low,
                 total_questions=total_questions,
                 time_limit_minutes=time_limit_minutes
             )
         )
         await self.db.execute(query)
         await self.db.commit()
+
     async def create_test(self, test_data: TestCreate, created_by: int) -> Test:
         """Create a new test"""
         try:
@@ -95,12 +98,18 @@ class TestRepository:
                 total_questions=test_data.total_questions,
                 time_limit_minutes=test_data.time_limit_minutes,
                 total_marks=test_data.total_marks,
-                high_priority_nodes=getattr(test_data, 'high_priority_nodes', None),
-                medium_priority_nodes=getattr(test_data, 'medium_priority_nodes', None),
-                low_priority_nodes=getattr(test_data, 'low_priority_nodes', None),
-                high_priority_questions=getattr(test_data, 'high_priority_questions', None),
-                medium_priority_questions=getattr(test_data, 'medium_priority_questions', None),
-                low_priority_questions=getattr(test_data, 'low_priority_questions', None),
+                high_priority_nodes=getattr(
+                    test_data, 'high_priority_nodes', None),
+                medium_priority_nodes=getattr(
+                    test_data, 'medium_priority_nodes', None),
+                low_priority_nodes=getattr(
+                    test_data, 'low_priority_nodes', None),
+                high_priority_questions=getattr(
+                    test_data, 'high_priority_questions', None),
+                medium_priority_questions=getattr(
+                    test_data, 'medium_priority_questions', None),
+                low_priority_questions=getattr(
+                    test_data, 'low_priority_questions', None),
                 scheduled_at=None,
                 application_deadline=None,
                 assessment_deadline=None,

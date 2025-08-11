@@ -274,7 +274,10 @@ class AssessmentWebSocketHandler:
                     "test_id": test_id,
                     "assessment_id": assessment_id,
                     "thread_id": str(assessment_id),
-                    "test_name": test.test_name,
+                    "test_details": {
+                        "name": str(test.test_name),
+                        "end_time": str(test.assessment_deadline),
+                    }
                 }
             })            # Generate first question automatically
             await self._generate_next_question(connection_id, test_id, db)

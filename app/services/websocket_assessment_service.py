@@ -334,7 +334,8 @@ class AssessmentGraphService:
                 level_scores: Dict[str, float] = {}
                 for priority, scores in skill_scores.items():
                     if scores:
-                        level_scores[priority] = (sum(scores) / len(scores)) * 100
+                        level_scores[priority] = (
+                            sum(scores) / len(scores)) * 100
                 if level_scores:
                     numerator = sum(
                         level_scores[p] * skill_weights[p] for p in level_scores)
@@ -374,11 +375,13 @@ class AssessmentGraphService:
         if self._finalized_threads.get(thread_id):
             return None
         lock = self._get_thread_lock(thread_id)
+
         async with lock:
             if db is not None:
                 finalized = await self._auto_finalize_if_deadline_passed(thread_id, db)
                 if finalized:
-                    logger.info(f"Deadline passed; skipping question generation for thread {thread_id}")
+                    logger.info(
+                        f"Deadline passed; skipping question generation for thread {thread_id}")
                     return None
             graph = await self._get_graph()
             config = RunnableConfig(configurable={"thread_id": thread_id})
@@ -410,10 +413,10 @@ class AssessmentGraphService:
                 "question": latest_question.model_dump() if hasattr(latest_question, 'model_dump') else latest_question,
                 "thread_id": thread_id
             }
-        except Exception as e:
-            logger.error(
-                f"Error generating question for connection {connection_id}: {str(e)}", exc_info=True)
-            return None
+        # except Exception as e:
+        #     logger.error(
+        #         f"Error generating question for connection {connection_id}: {str(e)}", exc_info=True)
+        #     return None
 
     async def process_answer(
         self,
@@ -473,8 +476,10 @@ class AssessmentGraphService:
                 })
                 await graph.ainvoke(command, config=config)
                 updated_state = await graph.aget_state(config)
-                processed_nodes = updated_state.values.get("processed_nodes", [])
-                candidate_graph = updated_state.values.get("candidate_graph", [])
+                processed_nodes = updated_state.values.get(
+                    "processed_nodes", [])
+                candidate_graph = updated_state.values.get(
+                    "candidate_graph", [])
                 total_nodes = len(candidate_graph)
                 completed_nodes = len(processed_nodes)
                 progress = (completed_nodes / (total_nodes or 1)) * 100
@@ -622,7 +627,8 @@ class AssessmentGraphService:
                 level_scores: Dict[str, float] = {}
                 for priority, scores in skill_scores.items():
                     if scores:
-                        level_scores[priority] = (sum(scores) / len(scores)) * 100
+                        level_scores[priority] = (
+                            sum(scores) / len(scores)) * 100
                 if level_scores:
                     numerator = sum(
                         level_scores[p] * skill_weights[p] for p in level_scores)
@@ -646,7 +652,8 @@ class AssessmentGraphService:
                     result=result
                 )
                 if not success:
-                    logger.error(f"Failed to update assessment {assessment_id}")
+                    logger.error(
+                        f"Failed to update assessment {assessment_id}")
                     return None
 
                 # After success:
