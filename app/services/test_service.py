@@ -205,9 +205,9 @@ class TestService:
                     test_data.low_priority_nodes = node_counts["L"]
 
                     # Set initial question counts based on node counts
-                    test_data.high_priority_questions = node_counts["H"] * 5
-                    test_data.medium_priority_questions = node_counts["M"] * 3
-                    test_data.low_priority_questions = node_counts["L"] * 3
+                    test_data.high_priority_questions = 5
+                    test_data.medium_priority_questions = 3
+                    test_data.low_priority_questions = 3
                     test_data.total_questions = (
                         test_data.high_priority_questions +
                         test_data.medium_priority_questions +
@@ -299,15 +299,17 @@ class TestService:
             # Send notification to recruiter
             updated_test = await test_repo.get_test_by_id(test_id)
             await self.notification_service.send_test_scheduled_notification(updated_test, creator)
-            
+
             # Send notifications to all shortlisted candidates
             try:
                 response_codes = await self.notification_service.send_test_scheduled_notifications_to_shortlisted_candidates(updated_test, db)
-                logger.info(f"Sent test scheduled notifications to shortlisted candidates for test {test_id}. Response codes: {response_codes}")
+                logger.info(
+                    f"Sent test scheduled notifications to shortlisted candidates for test {test_id}. Response codes: {response_codes}")
             except Exception as e:
-                logger.error(f"Failed to send notifications to shortlisted candidates for test {test_id}: {str(e)}")
+                logger.error(
+                    f"Failed to send notifications to shortlisted candidates for test {test_id}: {str(e)}")
                 # Don't fail the entire operation if email sending fails
-            
+
             return await self._format_test_response(updated_test, creator)
 
         except Exception as e:
@@ -495,7 +497,7 @@ class TestService:
             # Format responses
             responses = []
             for test in tests:
-                response = await self._format_test_response(test, creator)
+                response = await self._format_test_response(test, creator, db)
                 responses.append(response)
 
             return responses
@@ -657,7 +659,7 @@ class TestService:
             raise HTTPException(status_code=404, detail="User not found")
         return user
 
-    async def _format_test_response(self, test: Test, creator: User = None) -> TestResponse:
+    async def _format_test_response(self, test: Test, creator: User = None, db=None) -> TestResponse:
         """Format test response with creator info, total candidates, and duration"""
         import json
         from app.repositories.candidate_count_helper import count_candidates_by_test_id
@@ -677,9 +679,8 @@ class TestService:
             skill_graph = None
 
         # Get total candidates
-        total_candidates = await count_candidates_by_test_id(self.db, test.test_id) if hasattr(self, 'db') and self.db else 0
-        # If self.db is not set, fallback to 0 (should be set in service methods)
-
+        total_candidates = await count_candidates_by_test_id(db, test.test_id) if db else 0
+        print(f"[DEBUG] : candidate count", total_candidates)
         # Calculate duration (in minutes) if scheduled_at and assessment_deadline are present
         duration = None
         if test.scheduled_at and test.assessment_deadline:

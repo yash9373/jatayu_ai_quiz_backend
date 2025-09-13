@@ -96,7 +96,10 @@ class AssessmentWebSocketHandler:
             }
 
             assessment_repo = AssessmentRepository(db)
-            is_completed = await assessment_repo.is_assessment_completed(user_id, test_id)
+            if test_id is not None:
+                is_completed = await assessment_repo.is_assessment_completed(user_id, test_id)
+            else:
+                is_completed = False
             if is_completed:
                 await self._send_error(connection_id, "You have already completed this assessment.")
                 await websocket.close(code=4002, reason="Assessment already completed")
@@ -205,7 +208,6 @@ class AssessmentWebSocketHandler:
             WebSocketMessageType.HEARTBEAT: self._handle_heartbeat,
             WebSocketMessageType.GET_TEST_INFO: self._handle_get_test_info,
             WebSocketMessageType.ASSESSMENT_FINALIZED: self._finalize_assessment,
-
         }
 
         handler = handlers.get(message_type)
@@ -272,7 +274,10 @@ class AssessmentWebSocketHandler:
                     "test_id": test_id,
                     "assessment_id": assessment_id,
                     "thread_id": str(assessment_id),
-                    "test_name": test.test_name,
+                    "test_details": {
+                        "name": str(test.test_name),
+                        "end_time": str(test.assessment_deadline),
+                    }
                 }
             })            # Generate first question automatically
             await self._generate_next_question(connection_id, test_id, db)
@@ -326,7 +331,7 @@ class AssessmentWebSocketHandler:
 
             # Process answer using the assessment service with thread_id
             feedback_data = await assessment_graph_service.process_answer(
-                connection_id, question_id, selected_option
+                connection_id, question_id, selected_option, db
             )
 
             if not feedback_data:
@@ -338,7 +343,7 @@ class AssessmentWebSocketHandler:
                 "type": WebSocketMessageType.ANSWER_FEEDBACK,
                 "data": feedback_data
             })            # Send progress update
-            progress_data = await assessment_graph_service.get_assessment_progress(connection_id)
+            progress_data = await assessment_graph_service.get_assessment_progress(connection_id, db)
             if progress_data:
                 await self._send_progress_update(connection_id, progress_data)
 

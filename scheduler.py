@@ -11,19 +11,25 @@ from datetime import datetime, timezone, timedelta
 from app.repositories.test_repo import TestRepository
 from app.models.test import TestStatus, Test
 from app.models.candidate_application import CandidateApplication
+from app.models.assessment import Assessment, AssessmentStatus
+from app.repositories.assessment_repo import AssessmentRepository
 from app.db.database import AsyncSessionLocal
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
 class TestScheduler:
     """Enhanced test scheduler with comprehensive state management"""
-    
+
     def __init__(self, check_interval_seconds=30):
         self.check_interval = check_interval_seconds
-        self.preparing_timeout_minutes = 1  # Move PREPARING back to DRAFT after 1 minute if no candidates
-        
+        # Move PREPARING back to DRAFT after 1 minute if no candidates
+        self.preparing_timeout_minutes = 1
+
     async def log_scheduler_event(self, action: str, test_id: int, details: str, status: str = "success"):
         """Log scheduler events to database"""
         try:
@@ -42,8 +48,9 @@ class TestScheduler:
         """Move PREPARING tests back to DRAFT if no candidates for specified time"""
         try:
             now = datetime.now(timezone.utc)
-            timeout_threshold = now - timedelta(minutes=self.preparing_timeout_minutes)
-            
+            timeout_threshold = now - \
+                timedelta(minutes=self.preparing_timeout_minutes)
+
             # Find PREPARING tests that are old enough and have no candidates
             preparing_tests_stmt = select(Test).where(
                 and_(
@@ -53,7 +60,7 @@ class TestScheduler:
             )
             preparing_result = await session.execute(preparing_tests_stmt)
             preparing_tests = preparing_result.scalars().all()
-            
+
             for test in preparing_tests:
                 # Check if test has any candidate applications
                 candidate_count_stmt = select(func.count(CandidateApplication.application_id)).where(
@@ -61,28 +68,31 @@ class TestScheduler:
                 )
                 candidate_count_result = await session.execute(candidate_count_stmt)
                 candidate_count = candidate_count_result.scalar()
-                
+
                 if candidate_count == 0:
                     # No candidates, move back to DRAFT
                     repo = TestRepository(session)
                     await repo.update_test_status(test.test_id, TestStatus.DRAFT.value, is_published=False)
-                    logger.info(f"[Scheduler] Test {test.test_id} moved from PREPARING to DRAFT (no candidates)")
+                    logger.info(
+                        f"[Scheduler] Test {test.test_id} moved from PREPARING to DRAFT (no candidates)")
                     await self.log_scheduler_event(
-                        "preparing_to_draft", 
-                        test.test_id, 
+                        "preparing_to_draft",
+                        test.test_id,
                         f"Moved to DRAFT after {self.preparing_timeout_minutes} minutes with no candidate applications"
                     )
                 else:
-                    logger.debug(f"[Scheduler] Test {test.test_id} staying in PREPARING (has {candidate_count} candidates)")
-                    
+                    logger.debug(
+                        f"[Scheduler] Test {test.test_id} staying in PREPARING (has {candidate_count} candidates)")
+
         except Exception as e:
-            logger.error(f"[Scheduler] Error in PREPARING→DRAFT transition: {e}")
-            
+            logger.error(
+                f"[Scheduler] Error in PREPARING→DRAFT transition: {e}")
+
     async def handle_scheduled_to_live_transition(self, session):
         """Move SCHEDULED tests to LIVE when scheduled time arrives"""
         try:
             now = datetime.now(timezone.utc)
-            
+
             scheduled_stmt = select(Test).where(
                 and_(
                     Test.status == TestStatus.SCHEDULED.value,
@@ -95,7 +105,7 @@ class TestScheduler:
             )
             scheduled_result = await session.execute(scheduled_stmt)
             scheduled_tests = scheduled_result.scalars().all()
-            
+
             for test in scheduled_tests:
                 try:
                     # Check if test has shortlisted candidates
@@ -107,33 +117,36 @@ class TestScheduler:
                     )
                     shortlisted_count_result = await session.execute(shortlisted_count_stmt)
                     shortlisted_count = shortlisted_count_result.scalar()
-                    
+
                     repo = TestRepository(session)
                     await repo.update_test_status(test.test_id, TestStatus.LIVE.value, is_published=True)
-                    logger.info(f"[Scheduler] Test {test.test_id} moved to LIVE ({shortlisted_count} shortlisted candidates)")
+                    logger.info(
+                        f"[Scheduler] Test {test.test_id} moved to LIVE ({shortlisted_count} shortlisted candidates)")
                     await self.log_scheduler_event(
-                        "scheduled_to_live", 
-                        test.test_id, 
+                        "scheduled_to_live",
+                        test.test_id,
                         f"Test went LIVE with {shortlisted_count} shortlisted candidates"
                     )
-                    
+
                 except Exception as e:
-                    logger.error(f"[Scheduler] Failed to move test {test.test_id} to LIVE: {e}")
+                    logger.error(
+                        f"[Scheduler] Failed to move test {test.test_id} to LIVE: {e}")
                     await self.log_scheduler_event(
-                        "scheduled_to_live", 
-                        test.test_id, 
-                        f"Failed to move to LIVE: {str(e)}", 
+                        "scheduled_to_live",
+                        test.test_id,
+                        f"Failed to move to LIVE: {str(e)}",
                         "error"
                     )
-                    
+
         except Exception as e:
-            logger.error(f"[Scheduler] Error in SCHEDULED→LIVE transition: {e}")
+            logger.error(
+                f"[Scheduler] Error in SCHEDULED→LIVE transition: {e}")
 
     async def handle_live_to_ended_transition(self, session):
         """End LIVE tests when assessment deadline passes"""
         try:
             now = datetime.now(timezone.utc)
-            
+
             ending_stmt = select(Test).where(
                 and_(
                     Test.status == TestStatus.LIVE.value,
@@ -142,7 +155,7 @@ class TestScheduler:
             )
             ending_result = await session.execute(ending_stmt)
             ending_tests = ending_result.scalars().all()
-            
+
             for test in ending_tests:
                 try:
                     # Get candidate statistics
@@ -151,7 +164,7 @@ class TestScheduler:
                     )
                     total_count_result = await session.execute(total_candidates_stmt)
                     total_candidates = total_count_result.scalar()
-                    
+
                     shortlisted_candidates_stmt = select(func.count(CandidateApplication.application_id)).where(
                         and_(
                             CandidateApplication.test_id == test.test_id,
@@ -160,25 +173,27 @@ class TestScheduler:
                     )
                     shortlisted_count_result = await session.execute(shortlisted_candidates_stmt)
                     shortlisted_candidates = shortlisted_count_result.scalar()
-                    
+
                     repo = TestRepository(session)
                     await repo.update_test_status(test.test_id, TestStatus.ENDED.value)
-                    logger.info(f"[Scheduler] Test {test.test_id} moved to ENDED ({total_candidates} total, {shortlisted_candidates} shortlisted)")
+                    logger.info(
+                        f"[Scheduler] Test {test.test_id} moved to ENDED ({total_candidates} total, {shortlisted_candidates} shortlisted)")
                     await self.log_scheduler_event(
-                        "live_to_ended", 
-                        test.test_id, 
+                        "live_to_ended",
+                        test.test_id,
                         f"Test ended with {total_candidates} total candidates, {shortlisted_candidates} shortlisted"
                     )
-                    
+
                 except Exception as e:
-                    logger.error(f"[Scheduler] Failed to end test {test.test_id}: {e}")
+                    logger.error(
+                        f"[Scheduler] Failed to end test {test.test_id}: {e}")
                     await self.log_scheduler_event(
-                        "live_to_ended", 
-                        test.test_id, 
-                        f"Failed to end test: {str(e)}", 
+                        "live_to_ended",
+                        test.test_id,
+                        f"Failed to end test: {str(e)}",
                         "error"
                     )
-                    
+
         except Exception as e:
             logger.error(f"[Scheduler] Error in LIVE→ENDED transition: {e}")
 
@@ -186,7 +201,7 @@ class TestScheduler:
         """End SCHEDULED tests if assessment deadline passes before scheduled time"""
         try:
             now = datetime.now(timezone.utc)
-            
+
             expired_scheduled_stmt = select(Test).where(
                 and_(
                     Test.status == TestStatus.SCHEDULED.value,
@@ -195,29 +210,32 @@ class TestScheduler:
             )
             expired_result = await session.execute(expired_scheduled_stmt)
             expired_tests = expired_result.scalars().all()
-            
+
             for test in expired_tests:
                 try:
                     repo = TestRepository(session)
                     await repo.update_test_status(test.test_id, TestStatus.ENDED.value)
-                    logger.warning(f"[Scheduler] Test {test.test_id} moved to ENDED (expired before going live)")
+                    logger.warning(
+                        f"[Scheduler] Test {test.test_id} moved to ENDED (expired before going live)")
                     await self.log_scheduler_event(
-                        "scheduled_to_ended", 
-                        test.test_id, 
+                        "scheduled_to_ended",
+                        test.test_id,
                         "Test expired before going live - assessment deadline passed"
                     )
-                    
+
                 except Exception as e:
-                    logger.error(f"[Scheduler] Failed to expire test {test.test_id}: {e}")
-                    
+                    logger.error(
+                        f"[Scheduler] Failed to expire test {test.test_id}: {e}")
+
         except Exception as e:
-            logger.error(f"[Scheduler] Error in SCHEDULED→ENDED transition: {e}")
+            logger.error(
+                f"[Scheduler] Error in SCHEDULED→ENDED transition: {e}")
 
     async def cleanup_stale_tests(self, session):
         """Handle edge cases and cleanup stale test states"""
         try:
             now = datetime.now(timezone.utc)
-            
+
             # Find tests that have been in PREPARING state for too long (over 1 hour)
             stale_preparing_stmt = select(Test).where(
                 and_(
@@ -227,48 +245,181 @@ class TestScheduler:
             )
             stale_result = await session.execute(stale_preparing_stmt)
             stale_tests = stale_result.scalars().all()
-            
+
             for test in stale_tests:
-                logger.warning(f"[Scheduler] Found stale PREPARING test {test.test_id}, moving to DRAFT")
+                logger.warning(
+                    f"[Scheduler] Found stale PREPARING test {test.test_id}, moving to DRAFT")
                 repo = TestRepository(session)
                 await repo.update_test_status(test.test_id, TestStatus.DRAFT.value, is_published=False)
                 await self.log_scheduler_event(
-                    "cleanup_stale", 
-                    test.test_id, 
+                    "cleanup_stale",
+                    test.test_id,
                     "Cleaned up stale PREPARING test (>1 hour old)"
                 )
-                
+
         except Exception as e:
             logger.error(f"[Scheduler] Error in cleanup: {e}")
+
+    async def finalize_expired_assessments(self, session):
+        """
+        Finalize assessments for tests whose deadline has passed
+        Now marks assessments as COMPLETED (no TIMED_OUT state usage) and reuses scoring logic.
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            ended_tests_stmt = select(Test).where(
+                and_(
+                    Test.assessment_deadline <= now,
+                    Test.status.in_(
+                        [TestStatus.ENDED.value, TestStatus.LIVE.value, TestStatus.SCHEDULED.value])
+                )
+            )
+            ended_result = await session.execute(ended_tests_stmt)
+            ended_tests = ended_result.scalars().all()
+            for test in ended_tests:
+                try:
+                    unfinalized_assessments_stmt = select(Assessment).where(
+                        and_(
+                            Assessment.test_id == test.test_id,
+                            Assessment.status.in_([
+                                AssessmentStatus.IN_PROGRESS.value,
+                                AssessmentStatus.STARTED.value
+                            ])
+                        )
+                    )
+                    unfinalized_result = await session.execute(unfinalized_assessments_stmt)
+                    unfinalized_assessments = unfinalized_result.scalars().all()
+                    for assessment in unfinalized_assessments:
+                        try:
+                            await self._finalize_single_assessment(assessment, session)
+                            logger.info(
+                                f"[Scheduler] Auto-finalized assessment {assessment.assessment_id} for expired test {test.test_id}")
+                        except Exception as e:
+                            logger.error(
+                                f"[Scheduler] Failed to finalize assessment {assessment.assessment_id}: {e}")
+                            await self.log_scheduler_event(
+                                "assessment_finalization",
+                                test.test_id,
+                                f"Failed to finalize assessment {assessment.assessment_id}: {str(e)}",
+                                "error"
+                            )
+                    if unfinalized_assessments:
+                        await self.log_scheduler_event(
+                            "assessment_finalization",
+                            test.test_id,
+                            f"Auto-finalized {len(unfinalized_assessments)} expired assessments"
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"[Scheduler] Error processing assessments for test {test.test_id}: {e}")
+        except Exception as e:
+            logger.error(
+                f"[Scheduler] Error in finalize_expired_assessments: {e}")
+
+    async def _finalize_single_assessment(self, assessment: Assessment, session):
+        """Finalize a single assessment marking it COMPLETED with current graph state."""
+        try:
+            import json
+            from app.services.mcq_generation.graph import get_question_generation_graph
+            from langchain_core.runnables import RunnableConfig
+            from langgraph.types import Command
+
+            class StateEncoder(json.JSONEncoder):
+                def default(self, o):
+                    if hasattr(o, 'model_dump'):
+                        return o.model_dump()
+                    elif hasattr(o, 'dict'):
+                        return o.dict()
+                    elif isinstance(o, datetime):
+                        return o.isoformat()
+                    return str(o)
+            if getattr(assessment, 'status', None) == AssessmentStatus.COMPLETED.value:
+                return
+            thread_id = str(assessment.assessment_id)
+            graph = await get_question_generation_graph()
+            config = RunnableConfig(configurable={"thread_id": thread_id})
+            try:
+                await graph.ainvoke(Command(resume={"type": "exit"}), config=config)
+            except Exception:
+                pass
+            state = await graph.aget_state(config)
+            if not state.values:
+                candidate_graph = []
+                state_values = {}
+            else:
+                state_values = json.loads(
+                    json.dumps(state.values, cls=StateEncoder))
+                candidate_graph = state_values.get("candidate_graph", [])
+            skill_weights = {"H": 3, "M": 2, "L": 1}
+            skill_scores = {}
+            for node in candidate_graph:
+                priority = node.get("priority")
+                score = node.get("score")
+                if priority and score is not None:
+                    skill_scores.setdefault(priority, []).append(score)
+            level_scores = {}
+            for priority, scores in skill_scores.items():
+                if scores:
+                    level_scores[priority] = (sum(scores) / len(scores)) * 100
+            if level_scores:
+                numerator = sum(
+                    level_scores[p] * skill_weights[p] for p in level_scores)
+                denominator = sum(skill_weights[p] for p in level_scores)
+                final_percentage_score = numerator / denominator
+            else:
+                final_percentage_score = 0.0
+            current_time = datetime.now(timezone.utc)
+            generated_questions = state_values.get("generated_questions", {})
+            candidate_response = state_values.get("candidate_response", {})
+            result = {
+                "candidate_graph": candidate_graph,
+                "generated_questions": generated_questions,
+                "candidate_response": candidate_response
+            }
+            assessment_repo = AssessmentRepository(session)
+            await assessment_repo.update_assessment_status(
+                assessment_id=int(getattr(assessment, 'assessment_id')),
+                status=AssessmentStatus.COMPLETED.value,
+                percentage_score=final_percentage_score,
+                end_time=current_time,
+                result=result
+            )
+        except Exception as e:
+            logger.error(
+                f"Error finalizing assessment {getattr(assessment, 'assessment_id', 'unknown')}: {str(e)}", exc_info=True)
 
     async def update_test_states(self):
         """Main scheduler function - handles all test state transitions"""
         start_time = datetime.now(timezone.utc)
-        logger.info(f"[Scheduler] Starting test state update cycle at {start_time}")
-        
+        logger.info(
+            f"[Scheduler] Starting test state update cycle at {start_time}")
+
         try:
-            async with AsyncSessionLocal() as session:
+            async with AsyncSessionLocal() as session:  # AsyncSessionLocal is async-compatible
                 # Handle all state transitions
                 await self.handle_preparing_to_draft_transition(session)
                 await self.handle_scheduled_to_live_transition(session)
                 await self.handle_live_to_ended_transition(session)
                 await self.handle_scheduled_to_ended_transition(session)
                 await self.cleanup_stale_tests(session)
-                
+                # Auto-finalize assessments for ended tests
+                await self.finalize_expired_assessments(session)
+
                 # Commit all changes
                 await session.commit()
-                
+
             end_time = datetime.now(timezone.utc)
             duration = (end_time - start_time).total_seconds()
-            logger.info(f"[Scheduler] Completed test state update cycle in {duration:.2f}s")
-            
+            logger.info(
+                f"[Scheduler] Completed test state update cycle in {duration:.2f}s")
+
         except Exception as e:
             logger.error(f"[Scheduler] Critical error in update cycle: {e}")
             try:
                 await self.log_scheduler_event(
-                    "critical_error", 
-                    0, 
-                    f"Critical scheduler error: {str(e)}", 
+                    "critical_error",
+                    0,
+                    f"Critical scheduler error: {str(e)}",
                     "error"
                 )
             except:
@@ -278,16 +429,18 @@ class TestScheduler:
         """Run the scheduler continuously"""
         scheduler = AsyncIOScheduler()
         scheduler.add_job(
-            self.update_test_states, 
-            'interval', 
+            self.update_test_states,
+            'interval',
             seconds=self.check_interval,
             max_instances=1  # Prevent overlapping runs
         )
         scheduler.start()
-        
-        logger.info(f"[Scheduler] Started enhanced test state manager (check interval: {self.check_interval}s)")
-        logger.info(f"[Scheduler] PREPARING→DRAFT timeout: {self.preparing_timeout_minutes} minutes")
-        
+
+        logger.info(
+            f"[Scheduler] Started enhanced test state manager (check interval: {self.check_interval}s)")
+        logger.info(
+            f"[Scheduler] PREPARING→DRAFT timeout: {self.preparing_timeout_minutes} minutes")
+
         try:
             while True:
                 await asyncio.sleep(3600)  # Keep main thread alive
@@ -295,9 +448,11 @@ class TestScheduler:
             logger.info("[Scheduler] Shutting down...")
             scheduler.shutdown()
 
+
 async def main():
     """Main entry point"""
-    scheduler = TestScheduler(check_interval_seconds=10)  # Check every 10 seconds
+    scheduler = TestScheduler(
+        check_interval_seconds=10)  # Check every 10 seconds
     await scheduler.run()
 
 if __name__ == "__main__":
